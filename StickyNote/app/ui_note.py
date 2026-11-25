@@ -1365,10 +1365,14 @@ class NoteWindow:
         if self.pad.collapsed:              # folded up: what the memo says, left-aligned, cut to fit
             lines = self._fold_lines()
             full = " · ".join(lines)
-            text, room = full, max(0, hi - lo - px(8))
-            while text and self._date_font.measure(text + "…") > room:
-                text = text[:-1]
-            text = full if text == full else text.rstrip(" ·") + "…"
+            room = max(0, hi - lo - px(8))
+            f = self._date_font
+            key = (full, room, f.cget("family"), f.cget("size"), f.cget("weight"))
+            fit = getattr(self, "_fold_fit", None)
+            if fit is None or fit[0] != key:        # (runs at every resize and calendar_buttons())
+                narrow = min(f.measure(c) for c in " i.·l")
+                fit = self._fold_fit = (key, fit_text(full, room, f.measure, narrow))
+            text = fit[1]
             self.date_label.configure(text=text, anchor="w")
             self.date_label.place(x=lo + px(2), y=0, relheight=1, width=max(1, hi - lo - px(2)))
             shown = "\n".join(lines[:6]) + ("\n…" if len(lines) > 6 else "")

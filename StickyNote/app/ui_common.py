@@ -310,6 +310,25 @@ def _span_label(note) -> str:
     return _date_label(note.date)
 
 
+def fit_text(text: str, room: int, measure, min_char: int, ellipsis: str = "…") -> str:
+    """``text`` cut to fit ``room`` px with ``ellipsis`` after it, by binary search (a long memo
+    took a measure per character). The same rule as before: the whole text only if text +
+    ellipsis fits; else the longest prefix that fits with it, separators trimmed; else the
+    ellipsis alone. ``min_char``: the narrowest glyph's width, to cut a long text short first."""
+    if not text:
+        return ""
+    if measure(text + ellipsis) <= room:
+        return text
+    lo, hi = 0, min(len(text) - 1, room // max(1, min_char) + 2)
+    while lo < hi:                          # the longest prefix with measure(prefix + ellipsis) <= room
+        mid = (lo + hi + 1) // 2
+        if measure(text[:mid] + ellipsis) <= room:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip(" ·") + ellipsis
+
+
 def _ease_out(t):
     return 1 - (1 - t) ** 3
 
