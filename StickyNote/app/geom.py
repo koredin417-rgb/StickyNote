@@ -16,7 +16,7 @@ Box = tuple[int, int, int, int]
 CAL = "cal"                     # the calendar's id in shape lists and the links graph
 PILE_RESET = 8                  # a pile restarts after this many notes
 TILE_SHRINK_STEP = 0.05
-PILE_STEP = 36                  # = GRAB_H + TOP_BUTTON_H + 2 at 100 % scale (ui_common asserts it)
+PILE_STEP = 36                  # = DATE_ROW_H, a folded note's height at 100 % scale (ui_common asserts it)
 
 
 def shown_h(p) -> int:

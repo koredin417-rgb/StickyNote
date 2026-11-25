@@ -117,10 +117,9 @@ class ImageViewer:
         """Room for the picture: the note's full width, and at most 45 % of its height, less
         on a small note so the text keeps TEXT_MIN_LINES lines (the picture gives way)."""
         nw, px = self.nw, self.app.px
-        width = nw.win.winfo_width() if nw.win.winfo_width() > 1 else nw.pad.width
+        width = nw.main.winfo_width() if nw.main.winfo_width() > 1 else nw.pad.width - px(RAIL_W)
         height = nw.win.winfo_height() if nw.win.winfo_height() > 1 else nw.pad.height
-        others = (nw.grab.winfo_reqheight() + nw.bar.winfo_reqheight() + nw.format_bar.winfo_reqheight()
-                  + self.strip.winfo_reqheight() + px(14))
+        others = nw.bar.winfo_reqheight() + self.strip.winfo_reqheight() + px(14)
         if nw.add_bar.winfo_manager():
             others += nw.add_bar.winfo_reqheight() + px(8)
         line = int(nw.body.tk.call("font", "metrics", nw.body.cget("font"), "-linespace"))

@@ -355,7 +355,6 @@ class App:
         self.prefs.bin_days = days if days in BIN_DAY_CHOICES else 7
         set_shared("BIN_DAYS", self.prefs.bin_days)
         for w in self.windows.values():
-            w.btn_trash.tooltip.text = tr("tip_trash", days=BIN_DAYS)
             w.list_view._bin_badge()                # its tooltip: the count and the new days
             if w._bin_view is not None:
                 w._bin_view.info.configure(text=tr("bin_info", days=BIN_DAYS))
@@ -643,7 +642,7 @@ class App:
         """Show the calendar icon only where it may open one (see NoteWindow.toggle_calendar)."""
         for w in self.windows.values():
             if getattr(w, "_built", False):
-                w._fit_date()
+                w._arrange_chrome()
 
     def close_window(self, nw: NoteWindow):
         """Close a note window. Closing the last one quits; the windows closed just before it
@@ -1954,7 +1953,6 @@ class App:
             for w in wins:
                 w.pad.collapsed = on
                 w._apply_collapsed()
-                w._draw_grab()
             self.arrange()
         else:
             self.set_folded(wins, on)
@@ -1972,7 +1970,6 @@ class App:
         for w in wins:
             w.pad.collapsed = on
             w._apply_collapsed()
-            w._draw_grab()
         changes, parts = {}, {}
         for w in wins:
             note, s = _pad_box(w.pad), by_id.get(w.pad.id)

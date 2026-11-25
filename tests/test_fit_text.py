@@ -69,9 +69,10 @@ class FoldedTitleTest(unittest.TestCase):
                 nw.toggle_collapse(instant=True)
                 pump(app, timeout=0.5)
                 t0 = time.perf_counter()
-                nw._fit_date()
+                nw._fold_fit = None                     # (measured afresh, not from the cache)
+                nw._arrange_chrome()
                 ms = (time.perf_counter() - t0) * 1000
-                self.assertTrue(nw.date_label.cget("text").endswith("…"))
+                self.assertTrue(nw.row_texts()[-1].endswith("…"))
                 self.assertLess(ms, 50)
             finally:
                 close_app(app)
