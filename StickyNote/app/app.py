@@ -626,6 +626,8 @@ class App:
         """Close a note window. Closing the last one quits; the windows closed just before it
         (within CLOSE_ALL_S, e.g. the taskbar's "Close all windows") come back at the next
         start, where they were, with the last one."""
+        if "sync" in nw._jobs:                      # typed just before (the sync waits for a pause):
+            nw.sync_from_widgets()                  # caught up first, so is_empty below is right
         now = time.monotonic()
         if len(self.windows) == 1:                  # last one: quit, remembering where it was
             if nw.note.is_empty:

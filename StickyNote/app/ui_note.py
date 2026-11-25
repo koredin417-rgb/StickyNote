@@ -303,7 +303,7 @@ class NoteWindow:
 
         # ---- events
         self._trace_ids = [(self.header_var,       # removed in destroy(): a trace keeps this window alive
-                            self.header_var.trace_add("write", lambda *a: self.sync_from_widgets()))]
+                            self.header_var.trace_add("write", lambda *a: self._sync_soon()))]
         self.header_entry.bind("<Return>", lambda e: (self.body.focus_set(), "break")[1])
         self.body.bind("<<Modified>>", self._on_body_modified)
         self.body.bind("<<Selection>>", lambda e: self._update_format_buttons())
