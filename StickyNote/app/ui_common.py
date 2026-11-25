@@ -1296,6 +1296,18 @@ class ScrollArea:
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._item, width=e.width))
         self.scroll = OverlayScroll(self.canvas, app)
+        self._listeners: list = []
+
+    def listen(self, fn):
+        """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
+        if not self._listeners:
+            self.canvas.configure(yscrollcommand=self._yscroll)
+        self._listeners.append(fn)
+
+    def _yscroll(self, first, last):
+        self.scroll._set(first, last)
+        for fn in self._listeners:
+            fn()
 
     def wheel(self, event):
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
