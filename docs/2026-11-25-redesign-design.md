@@ -747,3 +747,36 @@ Two rare ones are deferred (see the PR).
 - `plan_growth` candidates are not pre-filtered. `plan_resize` costs 0.4 ms with 20 notes, and the filter would risk the results.
 - The gesture code stays in `NoteWindow` instead of a new `interact.py`; Phase 7 splits modules.
 - The single resize's remaining 13.6 ms p50 is mostly the pushed notes' own window moves.
+
+## Phase 5 results
+
+Recorded 2026-11-26 with `tools/render_bench.py` on Phase 4 code (`docs/perf/phase5-before.json`) and on Phase 5 code (`docs/perf/phase5.json`): a 500-memo list scrolled top to bottom in 41 jumps, 12 calendar day picks, and 20 keystrokes on line 1500 of a 3000-line memo.
+
+| Measure | Before | After |
+|---|---|---|
+| Memo cards alive, 500-memo list (most at once) | 140 (and growing as you scroll on) | **9** |
+| USER objects after scrolling the list | 1,403 | 207 |
+| Private memory, list shown and scrolled | +10.2 MB | +2.5 MB |
+| Keystroke in a 3000-line memo (p50 / max) | 11.6 / 12.7 ms | **0.15 / 0.28 ms** |
+| Calendar day pick, month redrawn? | yes (a full draw) | no: only the old and new day (tests) |
+
+**Done criteria:**
+- **The list:** a 500-memo list holds ≤ 40 cards. Met: at most 9 alive, checked at every step of a top-to-bottom scroll (test).
+- **The calendar:** hover and selection make no full redraw. Met: hover since Phase 1; a day pick and a memo pick now repaint only their own items (tests). A pick still takes about 17 ms, mostly the memo list showing that day's memos.
+
+**How it works:**
+- **The list is a virtual column:**
+  - every row has its place from the measured heights of the rows above it;
+  - only rows within a screen of the view exist;
+  - the rows in view are made at once, the rest two at a time;
+  - all rows made in a pass are measured in one layout pass;
+  - rows let go of are hidden at once and destroyed a few at a time;
+  - the row at the top of the view holds still while rows above it are measured;
+  - arrow keys reach every memo, making the picked card and scrolling to it.
+- **Typing** re-tags only the lines it touched, plus the cursor's line and its neighbours. When more lines came or went than that (an undo, say), the whole memo is re-tagged as before.
+
+**Known limit:** a far jump (dragging the scroll thumb into rows not seen yet) still takes about 95 ms per frame. That is the layout of a screen of cards' wrapped text labels. Wheel scrolling costs 0.3 ms per notch, 38 ms at a notch that makes a card. Cheaper cards (drawn on one canvas instead of about 20 widgets each) would be the next step.
+
+**Not done, by decision:**
+- No `DayIndex` keyed by a store revision. The store has no revision, and notes change in place in many places.
+- The picture viewer (§5.4.4) goes with images in Phase 6.
