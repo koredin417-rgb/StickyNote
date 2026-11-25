@@ -176,8 +176,10 @@ class CalendarPopup:
         top.protocol("WM_DELETE_WINDOW", lambda: self.nw.close_calendar())     # Alt+F4 on the calendar
         # No top.transient(): after showing it hides the window again, and it does not
         # set a real owner for borderless windows anyway. winapi.set_owner does.
+        self.edge = 0 if winapi.can_round() else 1     # as the note's: DWM corners, else a 1 px border
+        self._rounded = False
         self.frame = tk.Frame(top, bd=0)
-        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+        self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
         self._tiles: dict = {}          # rounded day tiles (smooth, drawn with Pillow)
         self._menu_font = tkfont.Font(top, family=UI_FONT, size=9)     # PopupMenu's: for cutting titles
 
@@ -697,6 +699,11 @@ class CalendarPopup:
         top.attributes("-alpha", 0.0)       # it slides out from beside its note, fading in
         top.deiconify()
         top.update_idletasks()
+        if not self._rounded:
+            self._rounded = True
+            if self.edge == 0 and not winapi.round_corners(top):
+                self.edge = 1
+                self.frame.pack_configure(padx=1, pady=1)
         winapi.set_owner(top, self.nw.win)
         top.attributes("-topmost", self.nw.pad.pinned)
         top.lift()

@@ -152,8 +152,11 @@ class NoteWindow:
         win.overrideredirect(True)
         self.colors = Colors.of(win, note.color)
 
+        # Windows 11: DWM rounds the corners and draws the shadow; else a 1 px border (win's bg)
+        self.edge = 0 if winapi.can_round() else 1
+        self._rounded = False               # asked DWM once the window is shown (show)
         self.frame = tk.Frame(win, bd=0)
-        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+        self._pack_frame()
 
         # ---- grab strip: a handle along the top for moving the note
         self.grab = tk.Canvas(self.frame, height=px(GRAB_H), bd=0, highlightthickness=0, cursor="fleur")
@@ -871,6 +874,11 @@ class NoteWindow:
             self._hooked = True
             winapi.disable_transitions(self.win)
             winapi.hook_syscommand(self.win, self.app._syscommands)
+        if not self._rounded:
+            self._rounded = True
+            if self.edge == 0 and not winapi.round_corners(self.win):
+                self.edge = 1               # DWM said no: square corners and the 1 px border
+                self._pack_frame()
         self.win.attributes("-topmost", self.pad.pinned)
         self.win.lift()
         if focus:
@@ -1005,6 +1013,9 @@ class NoteWindow:
                         write=lambda v, w=w: w.winfo_exists() and w.attributes("-alpha", v),
                         ease=anim.ease_in, frm=a, done=done if w is self.win else None)
 
+    def _pack_frame(self):
+        self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
+
     def _roll_geometry(self, h, dy=0):
         p = self.pad
         cover = getattr(self, "_rolling_cover", None)
@@ -1066,7 +1077,7 @@ class NoteWindow:
         if getattr(self, "_roll_geo", None) is not None:
             winapi.clip_height(self.win)
             self._roll_geo = None
-        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+        self._pack_frame()
         cover.destroy()
 
     def minimize_button(self):
@@ -2466,7 +2477,8 @@ class NoteWindow:
         if shot is None:
             return
         w, h, data = shot
-        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).crop((1, 1, w - 1, h - 1))
+        e = self.edge
+        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).crop((e, e, w - e, h - e))
         fw, fh = img.size
         fx, fy = self.frame.winfo_rootx(), self.frame.winfo_rooty()
 
@@ -2518,13 +2530,13 @@ class NoteWindow:
         cover.bind("<Configure>", lambda e: lay(e.width, e.height))
         lay(fw, fh)
         self._cover, self._cover_photos = cover, photos
-        cover.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
+        cover.place(x=e, y=e, relwidth=1, relheight=1, width=-2 * e, height=-2 * e)
         self.frame.pack_forget()
 
     def thaw(self):
         if self._cover is None:
             return
-        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+        self._pack_frame()
         self._cover.destroy()
         self._cover = self._cover_photos = None
 

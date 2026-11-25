@@ -260,6 +260,40 @@ def disable_transitions(win) -> None:
         pass
 
 
+DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND = 33, 2
+_can_round: bool | None = None
+
+
+def can_round() -> bool:
+    """Windows 11 (build 22000 on): DWM rounds a window's corners and gives it a shadow, layered
+    or not (spike S1). Windows 10 ignores the attribute: the app keeps its 1 px border there."""
+    global _can_round
+    if _can_round is None:
+        try:
+            _can_round = IS_WINDOWS and sys.getwindowsversion().build >= 22000
+        except Exception:
+            _can_round = False
+    return _can_round
+
+
+def round_corners(win) -> bool:
+    """Ask DWM for rounded corners (and with them its shadow) on ``win``'s frame window. False
+    when it cannot (not Windows 11, no frame window yet, or DWM said no)."""
+    hwnd = hwnd_of(win)
+    try:
+        framed = hwnd and hwnd != win.winfo_id()    # (before its first map Tk has no frame window)
+    except Exception:
+        framed = False
+    if not can_round() or not framed:
+        return False
+    try:
+        value = ctypes.c_int(DWMWCP_ROUND)
+        return ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(value), ctypes.sizeof(value)) == 0
+    except Exception:
+        return False
+
+
 DWMWA_FORCE_ICONIC_REPRESENTATION = 7
 DWMWA_HAS_ICONIC_BITMAP = 10
 DWMWA_DISALLOW_PEEK = 11
