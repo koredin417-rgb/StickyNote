@@ -2066,6 +2066,7 @@ class NoteWindow:
             w.stop_glide()
         self._snap_id = self._snap_hold = None
         self._drag = (event.x_root - self.win.winfo_rootx(), event.y_root - self.win.winfo_rooty())
+        self._pointer = None
         self._drag_from, self._drag_alt = (self.pad.x, self.pad.y), bool(event.state & 0x20000)
         self._drag_ctrl, self._drag_pt, self._grid_key = bool(event.state & 0x4), (event.x_root, event.y_root), None
         # the notes snapped to this one (and to those, and so on) move along, keeping their
@@ -2249,38 +2250,60 @@ class NoteWindow:
         self._snap_id = sid
         return nx, ny
 
-    @perf.timed("drag_move")
     def _drag_move(self, event):
+        """The pointer moved: noted, and applied once at the next display frame (_apply_drag)."""
         if self._drag:
-            dx, dy = self._drag
-            x, y = event.x_root - dx, event.y_root - dy
-            group = getattr(self, "_group", [])
-            self._snap_id = None
-            self._drag_pt = (event.x_root, event.y_root)
-            if not event.state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
-                x, y = self._snapped(x, y, group)
-            self.win.geometry(f"+{x}+{y}")
-            self._dropped = {self: (x, y)}          # where the drag put each (winfo_rootx can lag behind)
-            for w, ox, oy in group:
-                if w.win.winfo_exists():
-                    w.win.geometry(f"+{x + ox}+{y + oy}")
-                    self._dropped[w] = (x + ox, y + oy)
-            along = getattr(self, "_cal_along", None)
-            if along is not None:
-                cal, ox, oy, cw, ch = along
-                cal.nw.pad.calendar_pos = [x + ox, y + oy]    # (place() puts an undocked one there)
-                cal.move_to((x + ox, y + oy, x + ox + cw, y + oy + ch))
-            if group or along is not None:
-                self.app.ring.move(self._live_ring_boxes())
+            self._pointer = (event.x_root, event.y_root, event.state)
+            self.app.clock.request(self._apply_drag)
 
-    def _set_geometry(self, nw, geometry):
-        """Tell Tk only what changed (each change redraws that note)."""
-        if self._geometries.get(nw) != geometry:
-            self._geometries[nw] = geometry
-            nw.win.geometry(geometry)
+    def _flush_gesture(self):
+        """Let go before the next frame came: the last pointer is applied now, and its window moves
+        are done (the drop reads where they are)."""
+        clock = self.app.clock
+        for fn in (self._apply_drag, self._apply_resize):
+            if clock.take(fn):
+                fn()
+        clock.flush_moves()
+
+    @perf.timed("drag_move")
+    def _apply_drag(self):
+        """Once a frame: the dragged note (and those moving with it) where the last pointer puts
+        it, snapped; all of them in the frame's one window batch."""
+        if not self._drag or getattr(self, "_pointer", None) is None:
+            return
+        px_, py_, state = self._pointer
+        dx, dy = self._drag
+        x, y = px_ - dx, py_ - dy
+        group = getattr(self, "_group", [])
+        self._snap_id = None
+        self._drag_pt = (px_, py_)
+        if not state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
+            x, y = self._snapped(x, y, group)
+        clock = self.app.clock
+        clock.move(self.win, x, y)
+        self._dropped = {self: (x, y)}              # where the drag put each (winfo_rootx can lag behind)
+        for w, ox, oy in group:
+            if w.win.winfo_exists():
+                clock.move(w.win, x + ox, y + oy)
+                self._dropped[w] = (x + ox, y + oy)
+        along = getattr(self, "_cal_along", None)
+        if along is not None:
+            cal, ox, oy, cw, ch = along
+            cal.nw.pad.calendar_pos = [x + ox, y + oy]    # (place() puts an undocked one there)
+            cal.move_to((x + ox, y + oy, x + ox + cw, y + oy + ch))
+        if group or along is not None:
+            self.app.ring.move(self._live_ring_boxes())
+
+    def _place(self, nw, x, y, w=None, h=None):
+        """Tell Windows only what changed (each change redraws that note), in the frame's one batch."""
+        box = (x, y, w, h)
+        if self._geometries.get(nw) != box:
+            self._geometries[nw] = box
+            self.app.clock.move(nw.win, x, y, w, h)
 
     def _resize_start(self, event):
         self._resize = (event.x_root, event.y_root, self.win.winfo_width(), self.win.winfo_height())
+        self._pointer = None
         self._resize_area = self.app.area_of(_pad_box(self.pad))
         self._geometries = {}
         self.app.moving = True
@@ -2305,13 +2328,21 @@ class NoteWindow:
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)
 
-    @perf.timed("resize_move")
     def _resize_move(self, event):
+        """The pointer moved: noted, and applied once at the next display frame (_apply_resize)."""
         if self._resize:
+            self._pointer = (event.x_root, event.y_root, event.state)
+            self.app.clock.request(self._apply_resize)
+
+    @perf.timed("resize_move")
+    def _apply_resize(self):
+        """Once a frame: the note as big as the last pointer makes it; the notes resized or pushed
+        along (a group), or the live plan (one note), in the frame's one window batch."""
+        if self._resize and getattr(self, "_pointer", None) is not None:
             x0, y0, w0, h0 = self._resize
             px = self.app.px
-            w = max(px(MIN_W), w0 + event.x_root - x0)
-            h = max(px(MIN_H), h0 + event.y_root - y0)
+            w = max(px(MIN_W), w0 + self._pointer[0] - x0)
+            h = max(px(MIN_H), h0 + self._pointer[1] - y0)
             dw, dh = w - w0, h - h0
             a0, b0, a1, b1 = self._resize_box
             slack = px(2)
@@ -2325,7 +2356,7 @@ class NoteWindow:
                 w, h = w0 + dw, h0 + dh
             if getattr(self, "_resize_solo", False):
                 w, h = self._follow_live(a0, b0, w, h)
-            self._set_geometry(self, f"{w}x{h}")
+            self._place(self, a0, b0, w, h)
             boxes = [(a0, b0, a0 + w, b0 + h)]
             self._now[self.pad.id] = boxes[0]
             for o, (l, t, r, b) in group:
@@ -2348,7 +2379,7 @@ class NoteWindow:
                     oh = max(px(MIN_H), oh)
                 if (ow, oh) != (r - l, b - t) or o._cover is not None:
                     o.freeze()                  # its size changes: a picture is redrawn, not its widgets
-                self._set_geometry(o, f"{ow}x{oh}+{x}+{y}")
+                self._place(o, x, y, ow, oh)
                 boxes.append((x, y, x + ow, y + (_shown_h(o.pad) if o.pad.collapsed else oh)))
                 self._now[o.pad.id] = (x, y, x + ow, y + oh)
             if group:
@@ -2406,7 +2437,7 @@ class NoteWindow:
                 self._live[nw] = s.box
                 still.add(nw)
                 self._now[sid] = nb
-                self._set_geometry(nw, f"+{nb[0]}+{nb[1]}")
+                self._place(nw, nb[0], nb[1])
             elif nb != s.box:
                 outlines.append(nb)
         for nw, start in list(self._live.items()):          # no longer pushed: back to where it was
@@ -2414,7 +2445,7 @@ class NoteWindow:
                 del self._live[nw]
                 self._now.pop(nw.pad.id, None)
                 if nw.win.winfo_exists():
-                    self._set_geometry(nw, f"+{start[0]}+{start[1]}")
+                    self._place(nw, start[0], start[1])
         if outlines:
             app.outlines().show(outlines)
         else:
@@ -2423,6 +2454,7 @@ class NoteWindow:
         return w, h
 
     def _drag_end(self, _event=None):
+        self._flush_gesture()               # (the last pointer, if its frame had not come yet)
         dropped = getattr(self, "_dropped", None) if self._drag else None   # (off the screen: back in)
         if dropped:                         # the pads take where the drag put them now: the windows'
             for w, (x, y) in dropped.items():   # <Configure> may come later, and the links made at the
