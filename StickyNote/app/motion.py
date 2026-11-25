@@ -21,7 +21,7 @@ import tkinter as tk
 
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import GLIDE_MS, TIP_KEY, _alpha, accent_color, animating, fade, stop_animation
+from ui_common import GLIDE_MS, TIP_KEY, _alpha, accent_color, animating, stop_animation
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
@@ -67,6 +67,7 @@ class Motion:
         self._items: dict[str, _Item] = {}      # what is gliding, by id (a later plan's item replaces it)
         self._dones: list = []                  # the done() of every plan since the last end, in order
         self._arrived: list = []                # items whose glide got there, landed at the next frame
+        self._fading: dict = {}                 # id -> item cross-fading (Animations: Reduced)
 
     # ---- asking ------------------------------------------------------------------------
     def busy(self) -> bool:
@@ -268,21 +269,48 @@ class Motion:
                              write_extra=extra, done=lambda item=item: self._got_there(item))
 
     def _crossfade(self, item, win, cal):
+        """Animations: Reduced: the window fades out, jumps to its box, fades back. It runs on the
+        window's own "box" key, like a glide (a cancel, a finish or a later plan stops it the same
+        way, and puts the window's opacity back); the opacity is written here, not by a fade."""
         clock = self.app.clock
-        clock.stop(win, "box")
-        back = cal._target_alpha() if cal is not None else item.pad.alpha if item.pad is not None else 1.0
+        clock.stop(win, "alpha")
+        a0, jumped = _alpha(win), [False]
+        self._fading[item.id] = item
 
-        def jumped():
-            if self._items.get(item.id) is not item:
+        def step(k):
+            if k < 0.5:
+                win.attributes("-alpha", a0 * (1 - 2 * k))
                 return
-            self._show(item, 1.0)
-            fade(win, "alpha", 0.0, back, CROSSFADE_MS, done=lambda: self._got_there(item))
-        fade(win, "alpha", _alpha(win), 0.0, CROSSFADE_MS, done=jumped)
+            if not jumped[0]:
+                jumped[0] = True
+                self._show(item, 1.0)
+            win.attributes("-alpha", self._alpha_back(item.id, item) * (2 * k - 1))
+
+        def done():
+            self._fading.pop(item.id, None)
+            self._got_there(item)
+        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t)
+
+    def _alpha_back(self, pid, item):
+        if pid == CAL:
+            cal = self._calendar()
+            return cal._target_alpha() if cal is not None else 1.0
+        return item.pad.alpha if item.pad is not None else 1.0
+
+    def fading(self, pid) -> bool:
+        """``pid`` is cross-fading (Animations: Reduced): its opacity is the cross-fade's."""
+        return pid in self._fading
 
     def _stop_glide(self, pid):
         win = self._window(pid)
         if win is not None:
             self.app.clock.stop(win, "box")
+        item = self._fading.pop(pid, None)
+        if item is not None and win is not None:    # stopped mid cross-fade: as see-through as it should be
+            try:
+                win.attributes("-alpha", self._alpha_back(pid, item))
+            except tk.TclError:
+                pass
 
     def _got_there(self, item):
         """A glide's last frame: it lands at the start of the next frame, with the others that
@@ -299,7 +327,7 @@ class Motion:
                 del self._items[item.id]
                 landed.append(item)
         self._land_all(landed)
-        if not self._items:
+        if landed and not self._items:          # (nothing landed: whoever stopped them ends the action)
             self._end()
 
     def window_gone(self, pid):

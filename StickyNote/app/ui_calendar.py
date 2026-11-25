@@ -277,8 +277,8 @@ class CalendarPopup:
 
     def apply_alpha(self, animated=True):
         """See-through like the note, solid under the mouse; the change fades (HOVER_FADE_MS)."""
-        if self._closing or getattr(self, "_dipping", False):   # (a dip fades back when it has switched)
-            return
+        if self._closing or getattr(self, "_dipping", False) or self.app.motion.fading(CAL):
+            return                          # (a dip / a Reduced cross-fade puts the opacity back itself)
         try:
             if animated:
                 fade(self.top, "alpha", _alpha(self.top), self._target_alpha(), HOVER_FADE_MS)
@@ -487,9 +487,9 @@ class CalendarPopup:
         w, h = x1 - x0, y1 - y0
         top = self.top
         clock = anim.clock_of(top)
-        if clock.active(top, "box"):            # still sliding out: it is put here instead
-            clock.stop(top, "box")
-            self.apply_alpha(animated=False)
+        if clock.active(top, "box") and not self.app.motion.drives(CAL):
+            clock.stop(top, "box")              # still sliding out: it is put here instead
+            self.apply_alpha(animated=False)    # (a glide Motion drives goes on: Motion lands it)
         self.fit_size = (w, h)
         top.geometry(f"{w}x{h}+{x0}+{y0}")
         self._xy = (x0, y0)
@@ -974,13 +974,17 @@ class CalendarPopup:
             self._click_view_now(view)
             return
         self._dipping = True                # hovering in or out meanwhile does not take the fade over
+        anim.clock_of(top).stop(top, "alpha")
+
+        def out(k):
+            top.attributes("-alpha", a0 * (1 - k))
 
         def switch():
             self._dipping = False
             self._click_view_now(view)
             if not getattr(self, "_closing", False):
                 self.apply_alpha(animated=True)     # back to what it should be (HOVER_FADE_MS)
-        fade(top, "dip", a0, 0.0, VIEW_DIP_MS, done=switch)
+        animate(top, "dip", VIEW_DIP_MS, out, switch)   # (its own key: the switch rides on nothing shared)
 
     def _click_view_now(self, view: str) -> None:
         """The switch itself: the choice is held (calendar_hold) until the stretch rule agrees with it."""

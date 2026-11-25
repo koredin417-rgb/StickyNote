@@ -65,6 +65,9 @@ IDLE_S = 1.0                    # idle work (gc, idle()) once the clock has been
 IDLE_REPEAT_S = 10.0            # ... and garbage is collected at most this often while it stays quiet
 HALF_RATE_BELOW = 0.0155        # a display faster than ~65 Hz may be stepped every second vblank ...
 HALF_RATE_WORK = 0.5            # ... once the last frames' work takes more than this share of a period
+SKIP_MS = 1                     # Animations Off (or Reduced, for movement): it ends at the next frame, never
+                                # inside the call that started it (a done that destroys a window would run
+                                # before the caller's next line)
 
 
 def next_deadline(now: float, vblank: float | None, period: float | None, every: int = 1) -> float:
@@ -153,7 +156,7 @@ class FrameClock:
         k = (id(owner), key)
         self._anims.pop(k, None)
         if self.mode == "off" or (self.mode == "reduced" and ms > FAST):
-            ms = 0                                  # (the Animations setting: no motion)
+            ms = SKIP_MS                            # (the Animations setting: no motion; done at the next frame)
         a = _Anim(owner, key, time.perf_counter(), ms, ease, done)
         a.step = step
         try:
@@ -174,7 +177,7 @@ class FrameClock:
         k = (id(owner), channel)
         now = time.perf_counter()
         if self.mode == "off" or (self.mode == "reduced" and channel != "alpha"):
-            ms = 0                                  # (the Animations setting: no motion; Reduced keeps fades)
+            ms = SKIP_MS                            # (the Animations setting: no motion; Reduced keeps fades)
         elif self.mode == "reduced":
             ms = min(ms, FAST)
         scalar = not isinstance(to, (tuple, list))
@@ -217,6 +220,8 @@ class FrameClock:
     # ---- stopping ----------------------------------------------------------------------------
     def stop(self, owner, key: str | None = None) -> None:
         """Stop where it is now (no done). ``key`` None: everything this owner runs."""
+        if key is None or key == "box":
+            self._moves.pop(id(owner), None)        # (its move queued this frame goes too)
         if key is not None:
             self._anims.pop((id(owner), key), None)
             return
@@ -349,10 +354,7 @@ class FrameClock:
               ease=ease_out) -> None:
         """Glide ``win`` to the box ``to`` (x0, y0, x1, y1): a tween on its "box" channel, so a
         later glide turns from where it is. ``sized``: its size changes on the way too."""
-        def read():
-            b = self.box_now(win)
-            if b is not None:
-                return b
+        def read():                         # (only when no glide runs: where the window really is)
             x, y = win.winfo_rootx(), win.winfo_rooty()
             return x, y, x + win.winfo_width(), y + win.winfo_height()
 
