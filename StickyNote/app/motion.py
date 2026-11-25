@@ -16,13 +16,15 @@ window that takes no space).
 """
 from __future__ import annotations
 
+import math
 import time
 import tkinter as tk
 
 import perf
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, accent_color, animating, stop_animation
+from ui_common import (FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, _keep_timer_fine, accent_color, animating,
+                       stop_animation)
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
@@ -43,6 +45,14 @@ def _sweeps_over(start, end, note_start, note_end) -> bool:
         if x < n[2] - 1 and n[0] + 1 < x + w and y < n[3] - 1 and n[1] + 1 < y + h:
             return True
     return False
+
+
+def next_delay(t0: float, now: float, frame_ms: int = FRAME_MS) -> int:
+    """Milliseconds from ``now`` to the next frame on the grid t0 + k * frame_ms (seconds in,
+    ms out), at least 1: frames stay on the clock instead of drifting by each frame's work."""
+    spent = (now - t0) * 1000
+    due = (math.floor(spent / frame_ms) + 1) * frame_ms
+    return max(1, round(due - spent))
 
 
 def _lerp(a, b, k):
@@ -67,6 +77,7 @@ class Motion:
         self._items: dict[str, _Item] = {}      # what is gliding, by id (a later plan's item replaces it)
         self._job = None                        # the one after() loop
         self._dones: list = []                  # the done() of every plan since the last end, in order
+        self._clock0: float | None = None       # when the running loop started (its frames' grid)
 
     # ---- asking ------------------------------------------------------------------------
     def busy(self) -> bool:
@@ -238,7 +249,9 @@ class Motion:
             self._end()
             return
         if self._job is None:
+            self._clock0 = time.perf_counter()
             self._job = app.root.after(FRAME_MS, self._tick)
+        _keep_timer_fine(app.root)              # frames need Windows' 1 ms timer (else 16 or 31 ms apart)
         for item in new:                        # last: drawing may run idle tasks (and a plan in them)
             if item.id == CAL and item.sized and self._items.get(CAL) is item:
                 self._resize_calendar(item)
@@ -338,8 +351,10 @@ class Motion:
         self._land_all(landed)
         if self._items:
             if self._job is None:
-                self._job = self.app.root.after(FRAME_MS, self._tick)
+                self._job = self.app.root.after(next_delay(self._clock0, time.perf_counter()), self._tick)
+                _keep_timer_fine(self.app.root)
         else:
+            self._clock0 = None
             self._end()
 
     def _land_all(self, items):
