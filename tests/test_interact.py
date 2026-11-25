@@ -124,5 +124,72 @@ class InteractTest(unittest.TestCase):
         self.settle()
 
 
+class QuietGestureTest(InteractTest):
+    """Task 2: while a gesture runs, notes skip the save and layout work their <Configure> does."""
+
+    def test_one_apply_per_frame(self):            # (the parent's tests run once, in InteractTest)
+        pass
+
+    test_group_moves_in_one_batch = test_release_flushes_latest_pointer = test_one_apply_per_frame
+    test_resize_one_plan_per_frame = test_live_plan_matches_per_event = test_one_apply_per_frame
+
+    def test_frozen_note_lays_out_once(self):
+        a, b, c = self.group_of_three()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        spies = {}
+        a._resize_start(ev(x, y))
+        for o in (b, c):
+            spies[o] = Spy(wraps=o._arrange_chrome)
+            o._arrange_chrome = spies[o]
+        frozen = set()
+        for k in range(1, 5):
+            a._resize_move(ev(x - 12 * k, y - 8 * k))
+            self.frame()
+            frozen |= {o for o in (b, c) if o._cover is not None}
+        self.assertTrue(frozen, "no note was frozen: the test does not test")
+        for o in frozen:
+            self.assertEqual(spies[o].call_count, 0)
+        a._drag_end(ev(x - 48, y - 32))
+        self.settle()
+        for o in frozen:
+            self.assertGreaterEqual(spies[o].call_count, 1)
+            last = o.rail_shown()[-1]
+            self.assertLessEqual(last.winfo_rooty() + last.winfo_height(), o.btn_more.winfo_rooty())
+
+    def test_docked_calendar_follows_drag(self):
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        cal = a.calendar
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y, ALT))
+        for k in range(1, 4):
+            nx0 = a.pad.x
+            c0 = tuple(cal.target_box)
+            a._drag_move(ev(x - 20 * k, y + 10 * k, ALT))
+            self.frame()
+            pump(self.app, timeout=0.05)
+            shift = a.pad.x - nx0
+            self.assertNotEqual(shift, 0)
+            self.assertEqual(cal.target_box[0] - c0[0], shift)
+        a._drag_end(ev(x - 60, y + 30, ALT))
+        self.settle()
+
+    def test_no_save_mid_gesture(self):
+        a, b, c = self.group_of_three()
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y))
+        with patched(self.app, "request_save", Spy(wraps=self.app.request_save)) as spy:
+            for k in range(1, 4):
+                a._drag_move(ev(x + 10 * k, y + 6 * k))
+                self.frame()
+                pump(self.app, timeout=0.03)
+            self.assertEqual(spy.call_count, 0)
+            a._drag_end(ev(x + 30, y + 18))
+            self.settle()
+            self.assertGreaterEqual(spy.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2604,6 +2604,9 @@ class NoteWindow:
         self._pack_frame()
         self._cover.destroy()
         self._cover = self._cover_photos = None
+        if getattr(self, "_sized_late", False):     # resized while frozen: laid out for its size now
+            self._sized_late = False
+            self._sized(self.pad.width)
 
     # ---- folding up to the top bar --------------------------------------------------
     def collapsed_height(self):
@@ -2752,11 +2755,15 @@ class NoteWindow:
             return
         resized = (geo[2], geo[3]) != (p.width, p.height)
         p.x, p.y, p.width, p.height = geo
-        self.app.request_save()
-        if self.calendar:
+        if not self.app.moving:             # (a drag or resize saves once, when it lets go)
+            self.app.request_save()
+        if self.calendar:                   # a docked calendar follows its note, also mid-drag
             self.calendar.place()
         if resized:
-            self._sized(geo[2])
+            if self._cover is not None:     # a picture stands in: laid out once, when thawed
+                self._sized_late = True
+            else:
+                self._sized(geo[2])
 
     def _sized(self, width):
         """Its size changed (resized, or a glide got there): the date fits again, and the grab
