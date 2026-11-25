@@ -134,6 +134,20 @@ class ClockTest(unittest.TestCase):
         self.run_for(0.8)
         self.assertFalse(self.clock.busy)
 
+    def test_perf_counts_one_frame_per_key_per_tick(self):
+        import perf
+        old, perf.ENABLED = perf.ENABLED, True
+        perf.perf.reset()
+        try:
+            for i in range(3):                          # three windows gliding: one "box" frame per tick
+                self.clock.animate(object.__new__(type("W%d" % i, (), {})), "box", 200, lambda k: None)
+            self.run_for(0.3)
+            f = perf.perf.report()["frames"]["box"]
+            self.assertGreater(f["p50"], 5.0)
+        finally:
+            perf.ENABLED = old
+            perf.perf.reset()
+
 
 if __name__ == "__main__":
     unittest.main()

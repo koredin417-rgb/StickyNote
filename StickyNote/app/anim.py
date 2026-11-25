@@ -293,7 +293,7 @@ class FrameClock:
                 fn()
             except Exception:
                 self._report()
-        finished = []
+        finished, logged = [], set()
         for k, a in list(self._anims.items()):
             if self._anims.get(k) is not a:
                 continue                            # replaced or stopped by an earlier step
@@ -310,7 +310,8 @@ class FrameClock:
                 self._anims.pop(k, None)
                 self._report()
                 continue
-            if perf.ENABLED:
+            if perf.ENABLED and a.key not in logged:   # one frame per key per tick (many windows share "box")
+                logged.add(a.key)
                 perf.perf.frame(a.key, now)
             if s >= 1.0:
                 if self._anims.get(k) is a:
