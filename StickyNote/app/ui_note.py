@@ -540,6 +540,7 @@ class NoteWindow:
 
     def _rescale_inline(self):
         """The window changed width: fit the pictures in the text to it again."""
+        self.bump_look()
         for _key, value, index in self.body.dump("1.0", "end", image=True):
             if value in self._inline:
                 name, _old = self._inline[value]
@@ -617,6 +618,7 @@ class NoteWindow:
         return font
 
     def _draw_period_band(self):
+        self.bump_look()
         cv, c, px, note = self.period_band, self.colors, self.app.px, self.note
         cv.configure(bg=c.bg)
         cv.delete("all")
@@ -655,6 +657,7 @@ class NoteWindow:
         cal.draw()
 
     def _draw_add_bar(self, hover=False):
+        self.bump_look()
         cv, c, px = self.add_bar, self.colors, self.app.px
         cv.configure(bg=c.bg)
         cv.delete("all")
@@ -727,7 +730,7 @@ class NoteWindow:
             w, h = self.home.winfo_width(), self.home.winfo_height()
             if w < 8 or h < 8:
                 return None
-            shot = self.app.shots.shot(self)
+            shot = self.app.shots.fresh(self)
             if shot is None:
                 return None
             return shot.crop((x0, y0, x0 + w, y0 + h)), x0, y0
@@ -843,8 +846,9 @@ class NoteWindow:
             self.win.after_cancel(job)
         self._undo_note, self._notice, self._undo_action = None, False, None
         stop_animation(self.toast, "rise")
-        self.toast.place_forget()
-        self.bump_look()
+        if self.toast.place_info():         # (it showed: the look changes)
+            self.toast.place_forget()
+            self.bump_look()
 
     def undo_trash(self):
         note = self._undo_note
@@ -1046,39 +1050,12 @@ class NoteWindow:
         self.win.geometry(f"{p.width}x{round(h)}+{p.x}+{p.y + round(dy)}")
 
     def _shot(self):
-        """A picture of the whole note as it shows now (the kept one while current: shots), or None."""
-        return self.app.shots.shot(self)
+        """A picture of the whole note as it shows now (taken now: shots.fresh), or None."""
+        return self.app.shots.fresh(self)
 
     def _kept_shot(self, height):
         """Its kept picture at its own width and ``height`` (the last roll's), if still current."""
         return self.app.shots.peek(self, (self.pad.width, height))
-
-    def _shot_unfolded(self):
-        """No current picture of the note unfolded (it started folded, or its look changed since):
-        laid out unfolded at its full height while it can't be seen (alpha 0), photographed, and
-        put back as it was. Unfold and restore always roll with a picture. It stays at alpha 0:
-        the caller shows it again once the roll has clipped it."""
-        p, win = self.pad, self.win
-        was = p.collapsed
-        img = None
-        try:
-            win.attributes("-alpha", 0.0)
-            p.collapsed = False
-            self.views.pack(fill="both", expand=True)
-            self._place_grip()
-            self._arrange_chrome(p.width, p.height)
-            win.geometry(f"{p.width}x{p.height}+{p.x}+{p.y}")
-            win.update_idletasks()
-            img = self.app.shots.shot(self)
-        except tk.TclError:
-            pass
-        finally:
-            p.collapsed = was
-            if was:
-                self.views.pack_forget()
-                self.grip.place_forget()
-                self._arrange_chrome(p.width)
-        return img
 
     def _roll_cover(self, img):
         """While it rolls (ROLL_MS), a picture of the whole note stands in, anchored at the top: the
@@ -1194,14 +1171,8 @@ class NoteWindow:
             self.app.return_note(self, "restore")
 
         win.attributes("-alpha", 0.0)
-        if animate:
-            img = self._kept_shot(shown)
-            if img is None:                     # none current: shown at alpha 0 at its size, photographed
-                self._roll_geometry(shown)
-                win.deiconify()
-                win.update_idletasks()
-                img = self.app.shots.shot(self)
-            self._roll_cover(img)
+        if animate:                         # its picture from when it went, if it still looks that way
+            self._roll_cover(self._kept_shot(shown))
         self._roll_geometry(bar if animate else shown, slide if animate else 0)
         win.deiconify()
         self.minimized = False
@@ -1761,10 +1732,10 @@ class NoteWindow:
         self._sync_soon()
 
     def _sync_soon(self):
-        self.bump_look()                    # (typed: what it shows changed)
         """While typing, the stored memo catches up once the typing pauses: reading a long
         memo back (some 5 ms for 3000 lines) twice at every key made typing heavy. Whatever
         needs it at once (saving, switching memos, the list, closing) calls sync_from_widgets."""
+        self.bump_look()                    # (typed: what it shows changed)
         self._later("sync", TYPING_SYNC_MS, self.sync_from_widgets)
 
     def sync_from_widgets(self):
@@ -2029,6 +2000,7 @@ class NoteWindow:
 
     def _show_todo_icons(self, row):
         """Remove (and, when done, undo) at the right end of the to-do line ``row``."""
+        self.bump_look()
         info = self.body.dlineinfo(f"{row}.0")
         if info is None or self._line_mark(row) not in (TODO, DONE):
             self._hide_todo_icons()
@@ -2045,6 +2017,7 @@ class NoteWindow:
         self._todo_row = row
 
     def _hide_todo_icons(self):
+        self.bump_look()
         self.todo_undo.place_forget()
         self.todo_remove.place_forget()
         self._todo_row = None
@@ -2081,13 +2054,15 @@ class NoteWindow:
         return "break"
 
     def _update_format_buttons(self):
+        was = tuple(b.active for b in self.format_buttons)
         fmt = self._formats_at_cursor()
         for kind, button in zip(MARK_KINDS, self.format_buttons):
             button.set_active(kind in fmt)
         mark = self._line_mark(self.body.index("insert").split(".")[0])
         self.btn_bullets.set_active(mark == BULLET)
         self.btn_todo.set_active(mark in (TODO, DONE))
-        self.bump_look()
+        if tuple(b.active for b in self.format_buttons) != was:    # (a caret move alone: the same look)
+            self.bump_look()
 
     def _read_marks(self, length):
         """The formats in the text, as [kind, start, end] character offsets."""
@@ -2672,9 +2647,20 @@ class NoteWindow:
         """A folded note is its date row: DATE_ROW_H, its edge included (= PILE_STEP)."""
         return self.app.px(DATE_ROW_H)
 
-    def _apply_collapsed(self):
-        """Show the folded / unfolded state (pad.collapsed) without moving other notes."""
+    def _apply_collapsed(self, shoot=False):
+        """Show the folded / unfolded state (pad.collapsed) without moving other notes. ``shoot``:
+        a fold of a note that shows (not one built folded) first takes its picture, as it is
+        painted, for the unfold to roll."""
         p = self.pad
+        if p.collapsed and shoot:
+            try:
+                painted = (self.win.winfo_ismapped() and self.win.state() == "normal" and self._cover is None
+                           and getattr(self, "_rolling_cover", None) is None
+                           and self.win.winfo_height() == p.height)
+            except tk.TclError:
+                painted = False
+            if painted:
+                self.app.shots.fresh(self)
         if p.collapsed:
             self.hide_hints()
             self.hide_undo()
@@ -2702,7 +2688,7 @@ class NoteWindow:
             return
         if self.app.prefs.auto_layout and not p.free:    # the tiles close up / make room
             p.collapsed = not p.collapsed
-            self._apply_collapsed()
+            self._apply_collapsed(shoot=True)
             self.app.request_save()
             self.app.arrange_soon()
             return
@@ -2738,12 +2724,10 @@ class NoteWindow:
         its top bar to its height. A note the plan moves (not enough room under it) just opens."""
         p, win = self.pad, self.win
         bar = win.winfo_height()
-        alpha = _alpha(win)
-        img = self._kept_shot(p.height) or self._shot_unfolded()    # (alpha 0 meanwhile, if taken now)
+        img = self._kept_shot(p.height)         # taken as it showed, when it folded (none: the widgets roll)
         self.rolling = True
         self._roll_cover(img)
         self._roll_geometry(bar)                # (with the picture: only the bar shows, whatever comes)
-        win.attributes("-alpha", alpha)
         self.app.set_folded([self], False)
         if self.app.motion.drives(p.id):        # moved by the plan: it just opens
             self._drop_roll_cover(p.height)

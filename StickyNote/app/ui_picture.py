@@ -185,6 +185,9 @@ class ImageViewer:
         self.canvas.create_text(kx + kw / 2, h / 2, text=key, fill=c.muted, font=font, tags="hint")
 
     def _draw_picture(self, fade_from=None):
+        if self._source is None:            # (gone meanwhile: reset, release)
+            return
+        self.nw.bump_look()
         pil = self._source[1]
         vw, vh = self._view
         if self.zoom == 1:
@@ -235,6 +238,7 @@ class ImageViewer:
     def _set_hover(self, side):
         if side != self._hover:
             self._hover = side
+            self.nw.bump_look()
             if self._base is not None:
                 self._show()
 

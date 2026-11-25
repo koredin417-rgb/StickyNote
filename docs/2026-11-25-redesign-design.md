@@ -733,9 +733,13 @@ Two rare ones are deferred (see the PR).
   - The notes in the resized note's row or column freeze at the press.
   - A single resize makes its outline window at the press.
   - Before this, the first frame of a group resize photographed 16 notes (107–176 ms).
+- **Rolls and the fly:**
+  - Fold, minimize and the delete fly photograph the note afresh, while it shows and is painted.
+  - A fold made by the app (an instant fold, "Fold up all notes") photographs it first too.
+  - Unfold and restore roll that picture while the note still looks that way. Otherwise the widgets roll, as before.
+  - The review found that a picture taken at alpha 0, right after re-laying the note out, comes out black or stale, because Windows hasn't repainted it yet. The spec's "always covered" recipe was dropped for that reason.
+  - The delete fly pastes into one PhotoImage.
 - **Also on the clock:**
-  - Unfold and restore always roll with a current picture: one is taken at alpha 0 when none is kept.
-  - The delete fly is cut from the picture and pastes into one PhotoImage.
   - Picture pan/zoom and the calendar grip redraw once per frame.
   - The calendar range drag rebuilds its card only when the days change.
 

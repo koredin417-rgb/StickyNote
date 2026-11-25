@@ -127,43 +127,133 @@ class FlyTest(ShotsTest):
         self.assertEqual(len(photos), 1)
 
 
-class CoveredRollTest(ShotsTest):
-    """Task 4: unfold and restore always roll with a current picture."""
+def close_to(a, b, share=0.01):
+    """Two pictures alike: under ``share`` of their pixels differ visibly (a blinking caret may)."""
+    from PIL import ImageChops
+    if a is None or b is None or a.size != b.size:
+        return False
+    hist = ImageChops.difference(a.convert("RGB"), b.convert("RGB")).convert("L").histogram()
+    return sum(hist[24:]) <= share * a.size[0] * a.size[1]
+
+
+def mostly_black(img):
+    hist = img.convert("L").histogram()
+    return sum(hist[:16]) > 0.5 * img.size[0] * img.size[1]
+
+
+class RollPictureTest(ShotsTest):
+    """Review fix: rolls use only pictures of a painted note; never one taken at alpha 0."""
 
     test_shot_reused_until_changed = test_shot_dropped_on_close = None
     test_freeze_uses_cache = test_linked_notes_warm_when_idle = None
 
-    def test_unfold_without_kept_shot_is_covered(self):
+    def fill(self):
         nw = self.nw
-        nw.toggle_collapse(instant=True)
-        self.settle()
-        nw.body.insert("1.0", "접힌 동안 바뀐 글\n")   # (its picture from before is stale now)
+        nw.set_style("header")
+        nw.header_var.set("접기 시험")
+        nw.body.insert("1.0", "첫째 줄\n둘째 줄\n셋째 줄")
         nw.sync_from_widgets()
-        self.assertIsNone(nw._kept_shot(nw.pad.height))
+        nw.win.focus_force()                    # (no blinking caret in the pictures)
+        self.settle(0.4)
+        nw.close_hints()                        # (the first-start tips come back after a while)
+        self.settle(0.2)
+
+    def test_fold_all_then_unfold_rolls_the_painted_picture(self):
+        import shots
+        nw = self.nw
+        self.fill()
+        before = shots.capture(nw.win)
+        self.app.fold_all(True)
+        self.settle()
+        kept = nw._kept_shot(nw.pad.height)
+        self.assertTrue(close_to(kept, before), "the picture kept at the fold is not the note as it showed")
         nw.toggle_collapse()
         cover = getattr(nw, "_rolling_cover", None)
         self.assertIsNotNone(cover)
-        self.assertEqual(cover.full_h, nw.pad.height)
         pump(self.app, lambda: not nw.rolling, timeout=2)
         self.settle()
-        self.assertFalse(nw.pad.collapsed)
+        self.assertTrue(close_to(shots.capture(nw.win), before))
+
+    def test_unfold_with_stale_picture_rolls_live(self):
+        import shots
+        nw = self.nw
+        self.fill()
+        nw.toggle_collapse(instant=True)
+        self.settle()
+        nw.body.insert("1.0", "접힌 동안 바뀐 글\n")
+        nw.sync_from_widgets()
+        with patched(shots, "capture", Spy(wraps=shots.capture)) as spy:
+            nw.toggle_collapse()
+            self.assertIsNone(getattr(nw, "_rolling_cover", None))     # the widgets roll, as before
+            self.assertEqual(spy.call_count, 0)                         # nothing photographed unpainted
+        pump(self.app, lambda: not nw.rolling, timeout=2)
+        self.settle()
+        self.assertAlmostEqual(float(nw.win.attributes("-alpha")), nw.pad.alpha, places=2)
+        kept = self.app.shots.peek(nw)
+        if kept is not None:
+            self.assertFalse(mostly_black(kept))
+            self.assertTrue(close_to(kept, shots.capture(nw.win)))
+
+    def test_restore_after_colour_change_rolls_live(self):
+        nw = self.nw
+        self.fill()
+        nw.minimize(animate=False)
+        pump(self.app, timeout=0.2)
+        nw.set_color("#CFE6FF")
+        nw.restore()
+        self.assertIsNone(getattr(nw, "_rolling_cover", None))
+        pump(self.app, lambda: not nw.rolling, timeout=2)
+        self.settle()
         self.assertEqual(nw.win.winfo_height(), nw.pad.height)
         self.assertAlmostEqual(float(nw.win.attributes("-alpha")), nw.pad.alpha, places=2)
 
-    def test_restore_without_kept_shot_is_covered(self):
+    def test_fold_and_fly_take_fresh_pictures(self):
+        import shots
         nw = self.nw
-        nw.minimize(animate=False)
-        pump(self.app, timeout=0.2)
-        nw.body.insert("1.0", "숨은 동안 바뀐 글\n")
-        nw.sync_from_widgets()
-        nw.restore()
-        cover = getattr(nw, "_rolling_cover", None)
-        self.assertIsNotNone(cover)
-        self.assertEqual(cover.full_h, nw.pad.height)
+        self.fill()
+        self.app.shots.shot(nw)                         # a picture is kept ...
+        with patched(shots, "capture", Spy(wraps=shots.capture)) as spy:
+            nw.toggle_collapse()                        # ... but a fold photographs it afresh
+            self.assertEqual(spy.call_count, 1)
         pump(self.app, lambda: not nw.rolling, timeout=2)
         self.settle()
-        self.assertEqual(nw.win.winfo_height(), nw.pad.height)
-        self.assertAlmostEqual(float(nw.win.attributes("-alpha")), nw.pad.alpha, places=2)
+
+
+class StaleLookTest(ShotsTest):
+    """Review fix: what changes a note's look marks its picture stale; what does not, does not."""
+
+    test_shot_reused_until_changed = test_shot_dropped_on_close = None
+    test_freeze_uses_cache = test_linked_notes_warm_when_idle = None
+
+    def test_zoom_marks_stale(self):
+        from PIL import Image
+        nw = self.nw
+        nw.set_style("image")
+        nw.add_image(Image.new("RGB", (1600, 1200), "#3366AA"))
+        self.settle()
+        self.app.shots.shot(nw)
+        nw.viewer.zoom_at(40, 40, 2.0)
+        pump(self.app, timeout=0.1)
+        self.assertIsNone(self.app.shots.peek(nw))
+
+    def test_list_page_never_reused(self):
+        nw = self.nw
+        nw.show_list()
+        pump(self.app, timeout=0.2)
+        self.app.shots.shot(nw)
+        self.assertIsNone(self.app.shots.peek(nw))
+
+    def test_caret_move_keeps_the_picture(self):
+        nw = self.nw
+        nw.body.insert("1.0", "가나다 라마바")
+        nw.sync_from_widgets()
+        self.settle()
+        v = nw.look_version
+        nw.body.mark_set("insert", "1.2")
+        nw._update_format_buttons()
+        nw.body.mark_set("insert", "1.4")
+        nw._update_format_buttons()
+        self.assertEqual(nw.look_version, v)
 
 
 if __name__ == "__main__":

@@ -1954,7 +1954,7 @@ class App:
         if self.prefs.auto_layout:
             for w in wins:
                 w.pad.collapsed = on
-                w._apply_collapsed()
+                w._apply_collapsed(shoot=True)
             self.arrange()
         else:
             self.set_folded(wins, on)
@@ -1971,7 +1971,7 @@ class App:
         by_id = {s.id: s for s in old}
         for w in wins:
             w.pad.collapsed = on
-            w._apply_collapsed()
+            w._apply_collapsed(shoot=True)
         changes, parts = {}, {}
         for w in wins:
             note, s = _pad_box(w.pad), by_id.get(w.pad.id)

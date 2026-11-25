@@ -41,13 +41,16 @@ class ShotCache:
     def _key(nw, size=None):
         try:
             w, h = size or (nw.win.winfo_width(), nw.win.winfo_height())
-            top = nw.body.yview()[0] if nw.view == "home" else None
+            top = nw.body.yview()[0]
+            elsewhere = nw.app.calendar_elsewhere(nw) is not None      # (the rail's calendar icon)
         except tk.TclError:
             return None
-        return nw.look_version, w, h, nw.view, top
+        return nw.look_version, w, h, top, elsewhere
 
     def peek(self, nw, size=None) -> Image.Image | None:
         """Its picture if it is still current (at ``size``: (w, h), default the window's), else None."""
+        if nw.view != "home":               # (a list, settings or bin page changes too often to keep)
+            return None
         entry = self._shots.get(nw.pad.id)
         if entry is None or entry[0] is None or entry[0] != self._key(nw, size):
             return None
@@ -58,6 +61,15 @@ class ShotCache:
         img = self.peek(nw)
         if img is not None:
             return img
+        img = capture(nw.win)
+        if img is not None:
+            self._shots[nw.pad.id] = (self._key(nw), img)
+            self._stale.discard(nw.pad.id)
+        return img
+
+    def fresh(self, nw) -> Image.Image | None:
+        """Its picture taken now (it shows, painted), kept for later. Fold, minimize and the fly
+        take this: something not counted in the look version may have changed since."""
         img = capture(nw.win)
         if img is not None:
             self._shots[nw.pad.id] = (self._key(nw), img)
