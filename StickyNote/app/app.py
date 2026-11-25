@@ -2749,11 +2749,12 @@ class App:
             return
         winapi.collect_garbage()
         asked, self._syscommands[:] = list(self._syscommands), []
-        by_hwnd = {winapi.hwnd_of(nw.win): nw for nw in self.windows.values() if nw.win.winfo_exists()}
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it
             winapi.restore(self.proxy, raw=True)
             asked.append(("min", proxy, 0.0))
+        by_hwnd = ({winapi.hwnd_of(nw.win): nw for nw in self.windows.values() if nw.win.winfo_exists()}
+                   if asked else {})                # (idle: no note looked up, 33 times a second)
         mins = [e for e in asked if e[0] == "min"]
         multi = len(mins) >= 2 and mins[-1][2] - mins[0][2] <= MULTI_MIN_MS / 1000
         try:
