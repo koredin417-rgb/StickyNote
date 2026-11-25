@@ -1045,6 +1045,33 @@ class NoteWindow:
         """Its kept picture at its own width and ``height`` (the last roll's), if still current."""
         return self.app.shots.peek(self, (self.pad.width, height))
 
+    def _shot_unfolded(self):
+        """No current picture of the note unfolded (it started folded, or its look changed since):
+        laid out unfolded at its full height while it can't be seen (alpha 0), photographed, and
+        put back as it was. Unfold and restore always roll with a picture. It stays at alpha 0:
+        the caller shows it again once the roll has clipped it."""
+        p, win = self.pad, self.win
+        was = p.collapsed
+        img = None
+        try:
+            win.attributes("-alpha", 0.0)
+            p.collapsed = False
+            self.views.pack(fill="both", expand=True)
+            self._place_grip()
+            self._arrange_chrome(p.width, p.height)
+            win.geometry(f"{p.width}x{p.height}+{p.x}+{p.y}")
+            win.update_idletasks()
+            img = self.app.shots.shot(self)
+        except tk.TclError:
+            pass
+        finally:
+            p.collapsed = was
+            if was:
+                self.views.pack_forget()
+                self.grip.place_forget()
+                self._arrange_chrome(p.width)
+        return img
+
     def _roll_cover(self, img):
         """While it rolls (ROLL_MS), a picture of the whole note stands in, anchored at the top: the
         window only clips it, and nothing inside is laid out again at every frame (a long memo
@@ -1160,7 +1187,13 @@ class NoteWindow:
 
         win.attributes("-alpha", 0.0)
         if animate:
-            self._roll_cover(self._kept_shot(shown))
+            img = self._kept_shot(shown)
+            if img is None:                     # none current: shown at alpha 0 at its size, photographed
+                self._roll_geometry(shown)
+                win.deiconify()
+                win.update_idletasks()
+                img = self.app.shots.shot(self)
+            self._roll_cover(img)
         self._roll_geometry(bar if animate else shown, slide if animate else 0)
         win.deiconify()
         self.minimized = False
@@ -2695,10 +2728,12 @@ class NoteWindow:
         its top bar to its height. A note the plan moves (not enough room under it) just opens."""
         p, win = self.pad, self.win
         bar = win.winfo_height()
-        img = self._kept_shot(p.height)
+        alpha = _alpha(win)
+        img = self._kept_shot(p.height) or self._shot_unfolded()    # (alpha 0 meanwhile, if taken now)
         self.rolling = True
         self._roll_cover(img)
         self._roll_geometry(bar)                # (with the picture: only the bar shows, whatever comes)
+        win.attributes("-alpha", alpha)
         self.app.set_folded([self], False)
         if self.app.motion.drives(p.id):        # moved by the plan: it just opens
             self._drop_roll_cover(p.height)
