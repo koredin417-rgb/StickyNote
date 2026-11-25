@@ -1919,6 +1919,7 @@ class CalendarPopup:
 
     def destroy(self, animated=False):
         """Close it; ``animated``: it slides back towards its note, fading out, first."""
+        self.app.motion.window_gone(CAL)    # a glide in progress stops (it takes up no space now)
         self.hide_peek()
         self._hide_count()
         self.holiday_card.hide()

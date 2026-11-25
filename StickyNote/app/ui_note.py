@@ -1197,6 +1197,8 @@ class NoteWindow:
         stop_animation(self.win, "fade")
         stop_animation(self.win, "roll")
         stop_animation(self.win, "flash")
+        self.app.motion.window_gone(self.pad.id)    # a glide in progress: the pad keeps where it got
+        anim.clock_of(self.win).drop_owner(self.win)
         self._release()
         if self.win.winfo_exists():
             self.win.destroy()
