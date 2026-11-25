@@ -702,3 +702,84 @@ def gui_handles() -> tuple[int, int]:
         return 0, 0
     me = _k32.GetCurrentProcess()
     return int(_u32.GetGuiResources(me, 0)), int(_u32.GetGuiResources(me, 1))
+
+
+# ---- frame clock (anim.py) ----------------------------------------------------------------
+if IS_WINDOWS:
+    _U32_, _U64_ = ctypes.c_uint32, ctypes.c_uint64
+
+    class _DWM_TIMING_INFO(ctypes.Structure):
+        _pack_ = 1                          # dwmapi.h wraps its structs in pshpack1.h
+        _fields_ = [("cbSize", _U32_), ("rateRefresh_num", _U32_), ("rateRefresh_den", _U32_),
+                    ("qpcRefreshPeriod", _U64_), ("rateCompose_num", _U32_), ("rateCompose_den", _U32_),
+                    ("qpcVBlank", _U64_), ("cRefresh", _U64_), ("cDXRefresh", _U32_), ("qpcCompose", _U64_),
+                    ("cFrame", _U64_), ("cDXPresent", _U32_), ("cRefreshFrame", _U64_),
+                    ("cFrameSubmitted", _U64_), ("cDXPresentSubmitted", _U32_), ("cFrameConfirmed", _U64_),
+                    ("cDXPresentConfirmed", _U32_), ("cRefreshConfirmed", _U64_),
+                    ("cDXRefreshConfirmed", _U32_), ("cFramesLate", _U64_), ("cFramesOutstanding", _U32_),
+                    ("cFrameDisplayed", _U64_), ("qpcFrameDisplayed", _U64_), ("cRefreshFrameDisplayed", _U64_),
+                    ("cFrameComplete", _U64_), ("qpcFrameComplete", _U64_), ("cFramePending", _U64_),
+                    ("qpcFramePending", _U64_), ("cFramesDisplayed", _U64_), ("cFramesComplete", _U64_),
+                    ("cFramesPending", _U64_), ("cFramesAvailable", _U64_), ("cFramesDropped", _U64_),
+                    ("cFramesMissed", _U64_), ("cRefreshNextDisplayed", _U64_),
+                    ("cRefreshNextPresented", _U64_), ("cRefreshesDisplayed", _U64_),
+                    ("cRefreshesPresented", _U64_), ("cRefreshStarted", _U64_), ("cPixelsReceived", _U64_),
+                    ("cPixelsDrawn", _U64_), ("cBuffersEmpty", _U64_)]
+
+    _dwm = ctypes.WinDLL("dwmapi")
+    _dwm.DwmGetCompositionTimingInfo.argtypes = (wintypes.HWND, ctypes.POINTER(_DWM_TIMING_INFO))
+    _dwm.DwmGetCompositionTimingInfo.restype = ctypes.c_long
+    _qpf = ctypes.c_int64()
+    _k32.QueryPerformanceFrequency(ctypes.byref(_qpf))
+    _QPF = float(_qpf.value or 1)
+
+    _u32.BeginDeferWindowPos.argtypes = (ctypes.c_int,)
+    _u32.BeginDeferWindowPos.restype = wintypes.HANDLE
+    _u32.DeferWindowPos.argtypes = (wintypes.HANDLE, wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT)
+    _u32.DeferWindowPos.restype = wintypes.HANDLE
+    _u32.EndDeferWindowPos.argtypes = (wintypes.HANDLE,)
+    _u32.EndDeferWindowPos.restype = wintypes.BOOL
+    _u32.SystemParametersInfoW.argtypes = (wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT)
+    _u32.SystemParametersInfoW.restype = wintypes.BOOL
+
+_SWP_NOSIZE, _SWP_NOZORDER, _SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
+_SPI_GETCLIENTAREAANIMATION = 0x1042
+
+
+def composition_timing() -> tuple[float, float] | None:
+    """(the last vblank, the refresh period), both in time.perf_counter() seconds (it and the
+    performance counter share an epoch), or None when DWM cannot tell."""
+    if not IS_WINDOWS:
+        return None
+    info = _DWM_TIMING_INFO()
+    info.cbSize = ctypes.sizeof(info)
+    if _dwm.DwmGetCompositionTimingInfo(None, ctypes.byref(info)) != 0 or not info.qpcRefreshPeriod:
+        return None
+    return info.qpcVBlank / _QPF, info.qpcRefreshPeriod / _QPF
+
+
+def defer_move(moves) -> bool:
+    """Move (and size) several windows in one step: ``moves`` is a list of
+    (hwnd, x, y, w, h), w/h None to keep the size. False if Windows refused any of it."""
+    if not IS_WINDOWS or not moves:
+        return bool(moves) is False
+    h = _u32.BeginDeferWindowPos(len(moves))
+    if not h:
+        return False
+    for hwnd, x, y, w, hh in moves:
+        flags = _SWP_NOZORDER | _SWP_NOACTIVATE | (_SWP_NOSIZE if w is None or hh is None else 0)
+        h = _u32.DeferWindowPos(h, hwnd, None, int(x), int(y), int(w or 0), int(hh or 0), flags)
+        if not h:
+            return False
+    return bool(_u32.EndDeferWindowPos(h))
+
+
+def client_animations_enabled() -> bool:
+    """Windows' "Show animations in Windows" setting (True when it cannot be read)."""
+    if not IS_WINDOWS:
+        return True
+    on = wintypes.BOOL(1)
+    if not _u32.SystemParametersInfoW(_SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(on), 0):
+        return True
+    return bool(on.value)
