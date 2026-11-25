@@ -78,6 +78,31 @@ class ShotsTest(unittest.TestCase):
             self.assertIsNotNone(self.app.shots.peek(w))
 
 
+class FlyTest(ShotsTest):
+    """Task 5: the delete fly is cut from the note's picture and pastes into one PhotoImage."""
+
+    test_shot_reused_until_changed = test_shot_dropped_on_close = None
+    test_freeze_uses_cache = test_linked_notes_warm_when_idle = None
+
+    def test_fly_reuses_one_photo(self):
+        from PIL import ImageGrab
+        nw = self.nw
+        nw.body.insert("1.0", "지울 메모")
+        nw.sync_from_widgets()
+        with patched(ImageGrab, "grab", Spy(raises=RuntimeError("no screen grab"))):
+            nw.trash_current()
+            cv = nw._fly_canvas
+            photos = set()
+            for _ in range(15):
+                if not cv.winfo_exists():
+                    break
+                self.app.root.update()
+                if cv.winfo_exists():
+                    photos.add(id(cv._photo))
+                pump(self.app, timeout=0.012)
+        self.assertEqual(len(photos), 1)
+
+
 class CoveredRollTest(ShotsTest):
     """Task 4: unfold and restore always roll with a current picture."""
 

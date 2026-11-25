@@ -717,16 +717,20 @@ class NoteWindow:
 
     def _page_picture(self):
         """The memo page as it shows now, for the deletion animation: (image, x, y) in this window's
-        pixels; None off the home page, folded, hidden, or when the screen can't be read."""
+        pixels, cut from the note's picture (shots: not the screen, so nothing over the note shows
+        in it); None off the home page, folded, hidden, or when no picture can be had."""
         try:
             if self.view != "home" or self.pad.collapsed or not self.home.winfo_ismapped():
                 return None
-            x0, y0, w = self.home.winfo_rootx(), self.home.winfo_rooty(), self.home.winfo_width()
-            y1 = y0 + self.home.winfo_height()
-            if w < 8 or y1 - y0 < 8:
+            x0 = self.home.winfo_rootx() - self.win.winfo_rootx()
+            y0 = self.home.winfo_rooty() - self.win.winfo_rooty()
+            w, h = self.home.winfo_width(), self.home.winfo_height()
+            if w < 8 or h < 8:
                 return None
-            img = ImageGrab.grab((x0, y0, x0 + w, y1), all_screens=True)
-            return img, x0 - self.win.winfo_rootx(), y0 - self.win.winfo_rooty()
+            shot = self.app.shots.shot(self)
+            if shot is None:
+                return None
+            return shot.crop((x0, y0, x0 + w, y0 + h)), x0, y0
         except Exception:
             return None
 
@@ -739,23 +743,27 @@ class NoteWindow:
             bx = btn.winfo_rootx() - top.winfo_rootx() + btn.winfo_width() / 2
             by = btn.winfo_rooty() - top.winfo_rooty() + btn.winfo_height() / 2
             w0, h0 = img.size
-            cv = tk.Canvas(top, bd=0, highlightthickness=0, width=w0, height=h0)
-            cv._photo = ImageTk.PhotoImage(img, master=cv)
+            cv = self._fly_canvas = tk.Canvas(top, bd=0, highlightthickness=0, width=w0, height=h0,
+                                              bg=self.colors.bg)     # (the frame its size lags: the page's colour)
+            cv._photo = ImageTk.PhotoImage(img, master=cv)      # the one picture every frame pastes into
             pic = cv.create_image(0, 0, anchor="nw", image=cv._photo)
             cv.place(x=x, y=y)
             tk.Misc.tkraise(cv)
         except tk.TclError:
             return
-        half = img.resize((max(1, w0 // 2), max(1, h0 // 2)), Image.BOX)   # small frames scale from this
+        half = img.resize((max(1, w0 // 2), max(1, h0 // 2)), Image.BOX)   # smaller frames scale from these
+        quarter = half.resize((max(1, w0 // 4), max(1, h0 // 4)), Image.BOX)
         sx, sy = x + w0 / 2, y + h0 / 2
+        tkphoto = cv._photo._PhotoImage__photo                  # (Tk's photo under it: its size is set)
 
         def step(t):
             e = t * t                                       # speeds up into the bin
             s = 1 - 0.95 * e
             w, h = max(2, round(w0 * s)), max(2, round(h0 * s))
             cx, cy = sx + (bx - sx) * e, sy + (by - sy) * e
-            cv._photo = ImageTk.PhotoImage((img if s > 0.5 else half).resize((w, h), Image.BILINEAR), master=cv)
-            cv.itemconfigure(pic, image=cv._photo)
+            src = img if s > 0.5 else half if s > 0.25 else quarter
+            tkphoto.configure(width=w, height=h)
+            cv._photo.paste(src.resize((w, h), Image.BILINEAR))    # (no new PhotoImage a frame)
             cv.configure(width=w, height=h)
             cv.place(x=round(cx - w / 2), y=round(cy - h / 2))
 
