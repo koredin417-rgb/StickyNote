@@ -89,6 +89,10 @@ class ShotCache:
 
     def _warm(self) -> None:
         self._armed = False
+        if self.app.moving:                 # a drag or resize runs: never a picture in its frames
+            self._armed = True
+            self.app.clock.idle(self._warm)
+            return
         taken = 0
         for pid in list(self._stale):
             nw = self.app.windows.get(pid)
@@ -108,7 +112,7 @@ class ShotCache:
             self.app.root.after(WARM_AGAIN_MS, self._again)
 
     def _again(self) -> None:
-        if self.app.clock.busy:             # (moving again: once it is quiet)
+        if self.app.clock.busy or self.app.moving:      # (moving again: once it is quiet)
             self.app.clock.idle(self._warm)
         else:
             self._warm()

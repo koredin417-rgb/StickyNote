@@ -191,6 +191,16 @@ class QuietGestureTest(InteractTest):
         for o in (a, b, c):
             self.assertIsNone(o._cover)
 
+    def test_solo_resize_makes_its_outline_window_at_press(self):
+        nw = self.nw
+        self.app._outlines = None
+        g = nw.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        nw._resize_start(ev(x, y, ALT))
+        self.assertIsNotNone(self.app._outlines)        # built now, not inside the first frame
+        nw._drag_end(ev(x, y, ALT))
+        self.settle()
+
     def test_ring_window_keeps_its_size_while_growing(self):
         ring = self.app.ring
         px = self.app.px

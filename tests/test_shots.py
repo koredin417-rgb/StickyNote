@@ -78,6 +78,30 @@ class ShotsTest(unittest.TestCase):
             self.assertIsNotNone(self.app.shots.peek(w))
 
 
+class WarmTest(ShotsTest):
+    """Pictures are never taken ahead while a drag or resize runs."""
+
+    test_shot_reused_until_changed = test_shot_dropped_on_close = None
+    test_freeze_uses_cache = test_linked_notes_warm_when_idle = None
+
+    def test_no_warming_mid_gesture(self):
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        shots = self.app.shots
+        shots._stale |= {a.pad.id, b.pad.id}
+        self.app.moving = True
+        try:
+            with patched(winapi, "snapshot", Spy(wraps=winapi.snapshot)) as spy:
+                shots._warm()
+                shots._again()
+                self.assertEqual(spy.call_count, 0)
+        finally:
+            self.app.moving = False
+        pump(self.app, lambda: shots.peek(a) is not None and shots.peek(b) is not None, timeout=6)
+        self.assertIsNotNone(shots.peek(b))
+
+
 class FlyTest(ShotsTest):
     """Task 5: the delete fly is cut from the note's picture and pastes into one PhotoImage."""
 

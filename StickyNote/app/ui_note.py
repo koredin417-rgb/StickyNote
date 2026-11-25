@@ -2377,6 +2377,8 @@ class NoteWindow:
         cal = self.calendar
         self._resize_solo = (not self._resize_group and not self.app.prefs.auto_layout
                              and not (cal is not None and cal.docked))
+        if self._resize_solo:
+            self.app.outlines()             # (its window is made now, at the press: not inside a frame)
         if self._resize_group:              # the same line as when they move together
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)

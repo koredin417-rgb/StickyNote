@@ -95,27 +95,37 @@ class Bench:
                 "max": round(s[-1], 1), "over_period": sum(1 for w in s if w > period),
                 "over_2x": sum(1 for w in s if w > 2 * period)}
 
-    def run(self):
+    def scenario(self, name):
+        """One gesture on 20 fresh notes, made from each other (so they are linked)."""
         self.settle()
         self.open_20()
-        app = self.app
-        out = {"period_ms": round(self.period, 2), "events_per_frame": EVENTS_PER_FRAME}
-        nw = next(iter(app.windows.values()))
-        out["group_size"] = len(app.group_windows(nw.pad.id))
-        row = nw.row
-        xy = (row.winfo_rootx() + 60, row.winfo_rooty() + 10)
-        out["group_drag"] = self.stats(self.gesture(row, xy, lambda k: (k // 2, k // 4)), self.period)
-        g = nw.grip                         # one note (Alt): the live plan pushes the notes in line
-        xy = (g.winfo_rootx() + 4, g.winfo_rooty() + 4)
-        out["solo_resize"] = self.stats(self.gesture(g, xy, lambda k: (k // 4, k // 5), alt=True), self.period)
-        xy = (g.winfo_rootx() + 4, g.winfo_rooty() + 4)   # the linked group: their covers resize
-        out["group_resize"] = self.stats(self.gesture(g, xy, lambda k: (-(k // 4), -(k // 5))), self.period)
-        app.quit()
-        return out
+        nw = next(iter(self.app.windows.values()))
+        group = len(self.app.group_windows(nw.pad.id))
+        if name == "group_drag":
+            row = nw.row
+            xy = (row.winfo_rootx() + 60, row.winfo_rooty() + 10)
+            works = self.gesture(row, xy, lambda k: (k // 2, k // 4))
+        elif name == "solo_resize":         # one note (Alt): the live plan pushes the notes in line
+            g = nw.grip
+            works = self.gesture(g, (g.winfo_rootx() + 4, g.winfo_rooty() + 4), lambda k: (k // 4, k // 5), alt=True)
+        else:                               # the linked group: the notes in line resize as covers
+            g = nw.grip
+            works = self.gesture(g, (g.winfo_rootx() + 4, g.winfo_rooty() + 4), lambda k: (-(k // 4), -(k // 5)))
+        self.app.quit()
+        return {**self.stats(works, self.period), "group_size": group}
+
+
+def run():
+    out = {"events_per_frame": EVENTS_PER_FRAME}
+    for name in ("group_drag", "solo_resize", "group_resize"):
+        bench = Bench()
+        out["period_ms"] = round(bench.period, 2)
+        out[name] = bench.scenario(name)
+    return out
 
 
 if __name__ == "__main__":
-    result = Bench().run()
+    result = run()
     text = json.dumps(result, indent=1)
     print(text)
     if len(sys.argv) > 1:
