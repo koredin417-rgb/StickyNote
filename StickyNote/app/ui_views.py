@@ -788,6 +788,7 @@ class SettingsView:
         self.detail_area = ScrollArea(self.frame, self.app)
         self.area = self.list_area
         self.opened: str | None = None          # the setting open now (a SETTING_ROWS key)
+        self._page_u = 0.0                      # 0: the list shows, 1: a setting's page (_slide_page)
         self.labels, self.flat, self.muted = [], [], []
         self.pages: dict = {}                   # key -> its page in detail_area
         self.list_rows: dict = {}               # key -> (row, name, value, dot, chevron)
@@ -1030,13 +1031,23 @@ class SettingsView:
         self.pages[key].pack(fill="x")
         self.detail_area.to_top()
         lst, det = self.list_area.canvas, self.detail_area.canvas
-        det.place(relx=1, rely=0, relwidth=1, relheight=1)
+        u = self._page_u                        # (a close still sliding: it turns back from there)
+        det.place(relx=1 - u, rely=0, relwidth=1, relheight=1)
+        lst.place(relx=-SETTING_SLIDE_BACK * u, rely=0, relwidth=1, relheight=1)
         tk.Misc.tkraise(det)
+        self._slide_page(1.0, lambda: lst.place_forget())
 
-        def step(k):
-            det.place_configure(relx=1 - k)
-            lst.place_configure(relx=-SETTING_SLIDE_BACK * k)
-        animate(self.frame, "settings_page", SETTING_SLIDE_MS, step, lambda: lst.place_forget())
+    def _slide_page(self, to, done):
+        """The page's place, ``u`` from 0 (the list) to 1 (a setting): one tween, so a click the
+        other way while it slides turns it back from where it is."""
+        lst, det = self.list_area.canvas, self.detail_area.canvas
+
+        def write(u):
+            self._page_u = u
+            det.place_configure(relx=1 - u)
+            lst.place_configure(relx=-SETTING_SLIDE_BACK * u)
+        anim.clock_of(self.frame).tween(self.frame, "place:settings", to, SETTING_SLIDE_MS,
+                                        read=lambda: self._page_u, write=write, done=done)
 
     def close(self, animated=True):
         """Back to the list (the back arrow, Esc). True if a setting was open."""
@@ -1045,16 +1056,14 @@ class SettingsView:
         self.opened = None
         self._sync_rows()
         lst, det = self.list_area.canvas, self.detail_area.canvas
-        lst.place(relx=-SETTING_SLIDE_BACK if animated else 0, rely=0, relwidth=1, relheight=1)
+        u = self._page_u if animated else 0.0
+        lst.place(relx=-SETTING_SLIDE_BACK * u, rely=0, relwidth=1, relheight=1)
         tk.Misc.tkraise(det)
-
-        def step(k):
-            det.place_configure(relx=k)
-            lst.place_configure(relx=-SETTING_SLIDE_BACK * (1 - k))
         if animated:
-            animate(self.frame, "settings_page", SETTING_SLIDE_MS, step, lambda: det.place_forget())
+            self._slide_page(0.0, lambda: det.place_forget())
         else:
-            stop_animation(self.frame, "settings_page")
+            anim.clock_of(self.frame).stop(self.frame, "place:settings")
+            self._page_u = 0.0
             det.place_forget()
         return True
 
@@ -1062,7 +1071,8 @@ class SettingsView:
         """The list, from its top: how the page opens."""
         self.close(animated=False)
         lst = self.list_area.canvas
-        stop_animation(self.frame, "settings_page")
+        anim.clock_of(self.frame).stop(self.frame, "place:settings")
+        self._page_u = 0.0
         lst.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.detail_area.canvas.place_forget()
         self.list_area.to_top()

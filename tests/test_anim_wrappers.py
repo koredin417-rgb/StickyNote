@@ -52,7 +52,6 @@ class WrapperTest(unittest.TestCase):
         self.assertFalse(clock.busy)
         self.assertIsNone(clock._job)
 
-    @unittest.expectedFailure                       # until Tasks 6-7 move motion.py and the fly loop
     def test_no_frame_loops_outside_anim(self):
         app_dir = pathlib.Path(anim.__file__).parent
         for f in app_dir.glob("*.py"):

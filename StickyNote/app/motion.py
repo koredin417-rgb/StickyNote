@@ -302,9 +302,7 @@ class Motion:
         changes is frozen, and one taken over from an earlier plan that keeps its size is thawed."""
         if item.id == CAL:
             cal = self._calendar()
-            if animating(cal.top, "slide"):     # still sliding out: the glide takes it from here
-                stop_animation(cal.top, "slide")
-                cal.apply_alpha(animated=False)
+            # (still sliding out: the glide is the same "box" tween, so it turns from there)
             cal.target_box = item.end
             if cal.docked:                      # (follow_note keeps it beside its note's destination)
                 nx, ny = pad_box(cal.nw.pad)[:2]

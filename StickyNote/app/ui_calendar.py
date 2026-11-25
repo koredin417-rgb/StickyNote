@@ -51,6 +51,11 @@ def _dock_side(note, cal) -> str:
     return "below" if cy >= ny else "above"
 
 
+def _page_tag(month) -> str:
+    """The canvas tag of one month's page while pages slide (_page_to)."""
+    return "pg%d_%d" % month
+
+
 class HolidayCard:
     """The pop-up under a clicked red day: its holiday's name and what it is. Clicks pass
     through it (winapi.set_click_through, after -alpha is below 1.0: Tk layers it), and it takes
@@ -272,7 +277,7 @@ class CalendarPopup:
 
     def apply_alpha(self, animated=True):
         """See-through like the note, solid under the mouse; the change fades (HOVER_FADE_MS)."""
-        if self._closing or animating(self.top, "slide"):     # the slide fades to the new value itself
+        if self._closing or getattr(self, "_dipping", False):   # (a dip fades back when it has switched)
             return
         try:
             if animated:
@@ -284,20 +289,29 @@ class CalendarPopup:
             pass
 
     def _slide(self, opening, done=None):
-        """Opening: slide CAL_SLIDE px out from the note's side, fading in. Closing: back
-        towards the note, fading out."""
-        top = self.top
-        stop_animation(top, "alpha")
+        """Opening: slide CAL_SLIDE px out from the note's side (along that side: across for
+        left/right, up or down for above/below), fading in. Closing: back towards the note,
+        fading out, quicker. Its place and its fade are tweens: a reversal turns from where it is."""
+        top, clock = self.top, anim.clock_of(self.top)
         x, y = self._xy
-        d = self.app.px(CAL_SLIDE) * (-1 if getattr(self, "side", "right") == "right" else 1)
-        a0 = _alpha(top)
-
-        def step(k):
-            off = round(d * (1 - k)) if opening else round(d * k)
-            top.geometry(f"+{x + off}+{y}")
-            a1 = self._target_alpha() if opening else 0.0
-            top.attributes("-alpha", a0 + (a1 - a0) * k)
-        animate(top, "slide", CAL_SHOW_MS, step, done)
+        w, h = top.winfo_width(), top.winfo_height()
+        rest = (x, y, x + w, y + h)
+        try:
+            side = _dock_side(_pad_box(self.nw.pad), rest)
+        except Exception:
+            side = None
+        if side not in ("left", "right", "above", "below"):
+            side = getattr(self, "side", "right")
+        d = self.app.px(CAL_SLIDE)
+        dx, dy = {"right": (-d, 0), "left": (d, 0), "below": (0, -d), "above": (0, d)}[side]
+        tucked = (x + dx, y + dy, x + dx + w, y + dy + h)
+        if opening:
+            clock.glide(top, rest, CAL_SHOW_MS, frm=tucked, done=done)
+            fade(top, "alpha", _alpha(top), self._target_alpha(), CAL_SHOW_MS)
+        else:
+            ms = anim.exit_ms(CAL_SHOW_MS)
+            clock.glide(top, tucked, ms, ease=anim.ease_in, done=done)
+            fade(top, "alpha", _alpha(top), 0.0, ms)
 
     def _point(self, on):
         if self._closing:
@@ -472,8 +486,9 @@ class CalendarPopup:
         x0, y0, x1, y1 = (int(v) for v in box)
         w, h = x1 - x0, y1 - y0
         top = self.top
-        if animating(top, "slide"):
-            stop_animation(top, "slide")
+        clock = anim.clock_of(top)
+        if clock.active(top, "box"):            # still sliding out: it is put here instead
+            clock.stop(top, "box")
             self.apply_alpha(animated=False)
         self.fit_size = (w, h)
         top.geometry(f"{w}x{h}+{x0}+{y0}")
@@ -958,16 +973,14 @@ class CalendarPopup:
         if not shown or getattr(self, "_closing", False):
             self._click_view_now(view)
             return
-        stop_animation(top, "alpha")
-
-        def out(k):
-            top.attributes("-alpha", a0 * (1 - k))
+        self._dipping = True                # hovering in or out meanwhile does not take the fade over
 
         def switch():
+            self._dipping = False
             self._click_view_now(view)
             if not getattr(self, "_closing", False):
                 self.apply_alpha(animated=True)     # back to what it should be (HOVER_FADE_MS)
-        animate(top, "dip", VIEW_DIP_MS, out, switch)
+        fade(top, "dip", a0, 0.0, VIEW_DIP_MS, done=switch)
 
     def _click_view_now(self, view: str) -> None:
         """The switch itself: the choice is held (calendar_hold) until the stretch rule agrees with it."""
@@ -1121,41 +1134,64 @@ class CalendarPopup:
 
     def _page_to(self, month):
         """Show ``month``: the shown one slides out the way the arrow points and the new one slides
-        in beside it (option 1, "밀어내기", MONTH_SLIDE_MS); the weekday row stays. A page still
-        sliding is finished at once first. The same month: just a redraw."""
+        in beside it (option 1, "밀어내기", MONTH_SLIDE_MS); the weekday row stays. A click while a
+        page slides draws the next month beside the one coming in and the slide turns toward it
+        from where it is (one tween), never jumping. The same month, at rest: just a redraw."""
         g = self.grid
-        stop_animation(g, "page")
-        if getattr(self, "_paging", False):         # (a click during a slide: that slide is done now)
-            self._paging = False
-            self.draw()
         old = self.month
+        paging = getattr(self, "_paging", False)
         self.month = month
-        if month == old or not g.winfo_ismapped():
+        if not g.winfo_ismapped() or (month == old and not paging):
+            anim.clock_of(g).stop(g, "canvas:paging")
+            self._end_paging()
             self.draw()
             return
-        way = 1 if month > old else -1
-        g.addtag_all("old")
-        g.delete("old&&wk")                         # (the weekday row is drawn again, and does not move)
-        self.draw(keep="old")
-        g.addtag_all("new")
-        g.dtag("old", "new")
-        g.dtag("wk", "new")
         width = max(g.winfo_width(), self.cell_w * 7)
-        g.move("new", way * width, 0)
-        g.addtag_withtag("paging", "old")           # both pages move as one (one move a frame)
-        g.addtag_withtag("paging", "new")
-        self._paging, shift = True, [0]
+        if not paging:                              # the month shown now becomes the first page
+            self._pages, self._page_shift = {old: 0}, 0
+            g.addtag_all(_page_tag(old))
+            g.addtag_all("paging")
+        pages = self._pages
+        if month in pages:                          # back to a page already there: drawn again in place
+            base = pages.pop(month)
+            g.delete(_page_tag(month))
+        else:
+            base = pages.get(old, 0) + (1 if month > old else -1) * width
+            for mo, b in list(pages.items()):       # (a page already at that place goes)
+                if b == base:
+                    g.delete(_page_tag(mo))
+                    del pages[mo]
+        g.delete("paging&&wk")                      # (the weekday row is drawn again, and does not move)
+        self.draw(keep="paging")
+        g.addtag_all("fresh")
+        g.dtag("paging", "fresh")
+        g.dtag("wk", "fresh")
+        g.addtag_withtag(_page_tag(month), "fresh")
+        g.addtag_withtag("paging", "fresh")
+        g.move("fresh", base + self._page_shift, 0)
+        g.dtag("fresh")
+        pages[month] = base
+        self._paging = True
 
-        def step(k):
-            to = round(-way * width * k)
-            if to != shift[0]:
-                g.move("paging", to - shift[0], 0)
-                shift[0] = to
+        def write(v):
+            to = round(v)
+            if to != self._page_shift:
+                g.move("paging", to - self._page_shift, 0)
+                self._page_shift = to
 
         def done():
-            self._paging = False
-            self.draw()                             # a clean page at the end (hit boxes, hover)
-        animate(g, "page", MONTH_SLIDE_MS, step, done, ease=_ease_out_sine)
+            for mo in list(self._pages):
+                if mo != self.month:
+                    g.delete(_page_tag(mo))
+            g.dtag("paging")
+            g.dtag(_page_tag(self.month))
+            self._end_paging()
+        anim.clock_of(g).tween(g, "canvas:paging", -base, MONTH_SLIDE_MS,
+                               read=lambda: float(self._page_shift), write=write, done=done)
+
+    def _end_paging(self):
+        self._paging = False
+        self._pages, self._page_shift = {}, 0
 
     # -- days
     def marked_days(self):
@@ -1927,8 +1963,7 @@ class CalendarPopup:
             self.grid.after_cancel(self._click_job)
             self._click_job = None
         if not animated or self._closing:
-            for key in ("slide", "alpha"):
-                stop_animation(self.top, key)
+            anim.clock_of(self.top).stop(self.top)
             if self.top.winfo_exists():
                 self.top.destroy()
             self.app.space_changed()
