@@ -590,3 +590,20 @@ Each phase ends with a working app, checked in `preview.py` against the perf har
   - the 400 ms flash;
   - keeping 8 monitor setups;
   - the 64 MB image budget.
+
+---
+
+## Baseline (Phase 0)
+
+Recorded 2026-11-25 with `tools/baseline.py baseline` (`docs/perf/baseline.json`): real monitors, a scratch data folder, `STICKY_PERF=1`. Frame figures are intervals between frames, in ms (60 Hz ≈ 16.7).
+
+| Scenario | Wall | Δ private memory | Frames (p95 / max ms) | Spans (p95 ms) | Notes |
+|---|---|---|---|---|---|
+| open_20 | 3.2 s | +11.7 MB | fade 24.5 / 108, flash 14.6 / 27.6, motion 30.2 / 34.8 | save 3.0 | Glides step at about 30 ms (no fine timer: A2) |
+| tidy | 0.5 s | 0 | motion 19.3 / 19.3 | – | |
+| group_drag (8 notes) | 1.4 s | 0 | – | drag_move 0.7 | |
+| resize | 2.8 s | +0.1 MB | show 75.3 / 75.3, motion 23.4 | resize_move 0.3 | |
+| calendar_paging | 3.0 s | +1.9 MB | slide 54.8, motion 54.9, page 19.6 / 71.6 | calendar_draw 14.1 | Frames of up to 55–72 ms while paging |
+| typing (300 chars) | 5.7 s | +0.1 MB | – | body_modified ≈ 0 | Inserts by script, not key events: per-key handlers (`_typed`) aren't exercised. Limitation of this scenario. |
+| list_500 | 6.3 s | **+45.1 MB** | – | list_refresh 148.6, calendar_draw 271.4 | Building all 500 cards took 6.0 s; **USER objects 649 → 5,277** |
+| open_close_50 | 27.1 s | +8.2 MB | fade 67.3 / **200**, flash 24.3 / **207** | save 5.0 (n=101) | **70 note windows alive with 20 open: all 50 closed windows leaked (M1)** |
