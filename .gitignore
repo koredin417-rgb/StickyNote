@@ -1,0 +1,13 @@
+# bundled Python runtime (shipped in the zip, not tracked)
+StickyNote/runtime/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# local app data used by preview.py
+StickyNote/preview-data/
+
+# brainstorming mockups and screenshots
+.superpowers/
+docs/perf/*.png
