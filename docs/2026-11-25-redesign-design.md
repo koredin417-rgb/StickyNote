@@ -610,3 +610,20 @@ Recorded 2026-11-25 with `tools/baseline.py baseline` (`docs/perf/baseline.json`
 | typing (300 chars) | 5.7 s | +0.1 MB | – | body_modified ≈ 0 | Inserts by script, not key events: per-key handlers (`_typed`) aren't exercised. Limitation of this scenario. |
 | list_500 | 6.3 s | **+45.1 MB** | – | list_refresh 148.6, calendar_draw 271.4 | Building all 500 cards took 6.0 s; **USER objects 649 → 5,277** |
 | open_close_50 | 27.1 s | +8.2 MB | fade 67.3 / **200**, flash 24.3 / **207** | save 5.0 (n=101) | **70 note windows alive with 20 open: all 50 closed windows leaked (M1)** |
+
+## Phase 1 results
+
+Recorded 2026-11-25 with `tools/baseline.py phase1` (`docs/perf/phase1.json`), same machine and scenarios as the baseline.
+
+| Scenario | Baseline | Phase 1 |
+|---|---|---|
+| open_close_50: live note windows (20 open) | **70** (all 50 closed windows leaked) | **20** (every closed window freed) |
+| open_close_50: Δ private memory | +8.2 MB | +5.1 MB. A separate 200-cycle run stays flat (30.0 → 30.8 → 31.4 → 31.0 → 31.5 MB per 50 cycles): no growth per close, the rest is the allocator's high-water mark |
+| Glide frames (motion p95 / max ms): open_20 | 30.2 / 34.8 | 26.0 / 31.0 |
+| resize | 23.4 / 23.4 | 16.5 / 16.5 |
+| open_close_50 | 20.5 / 25.6 | 18.5 / 21.7 |
+| tidy | 19.3 / 19.3 | 19.2 / 19.2 |
+| Folded title, 20,000-character memo (`_fit_date`) | 21,104 ms | < 50 ms (test) |
+| Idle 30 ms drain, 5 notes | 7 window lookups per tick | 0 note lookups (test) |
+
+Still slow, for later phases: fade/flash frames up to ~200 ms while windows are being built (Phase 2 clock; fade p95 in open_close_50 ranged 67–147 ms between runs, so it is noisy), calendar paging frames ~54 ms (Phase 5), and the 500-memo list (6 s, +45 MB, ~5,300 USER objects; Phase 5). Glide frames in open_20 stay above the display period because window creation blocks the loop (Phase 2).
