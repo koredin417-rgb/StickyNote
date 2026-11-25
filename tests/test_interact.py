@@ -176,6 +176,39 @@ class QuietGestureTest(InteractTest):
         a._drag_end(ev(x - 60, y + 30, ALT))
         self.settle()
 
+    def test_ring_window_keeps_its_size_while_growing(self):
+        ring = self.app.ring
+        px = self.app.px
+        boxes = [(100, 100, 420, 420), (430, 100, 750, 420)]
+        ring.show(boxes, self.nw.win)
+        pump(self.app, timeout=0.1)
+        with patched(ring.top, "geometry", Spy(wraps=ring.top.geometry)) as spy:
+            for k in range(1, 11):              # the first box grows 3 px a frame, as in a resize
+                grown = [(100, 100, 420 + 3 * k, 420 + 2 * k), (430 + 3 * k, 100, 750 + 3 * k, 420 + 2 * k)]
+                ring.move(grown)
+                pump(self.app, timeout=0.01)
+        self.assertLessEqual(spy.call_count, 1)
+        x0, y0 = ring.top.winfo_rootx(), ring.top.winfo_rooty()
+        x1, y1 = x0 + ring.top.winfo_width(), y0 + ring.top.winfo_height()
+        gap, _r, lw = (px(v) for v in (6, 9, 2))
+        self.assertLessEqual(x0, 100 - gap - lw)
+        self.assertGreaterEqual(x1, 780 + gap + lw)
+        self.assertGreaterEqual(y1, 440 + gap + lw)
+        ring.hide()
+
+    def test_ring_moves_without_redrawing_on_a_drag(self):
+        ring = self.app.ring
+        boxes = [(100, 100, 420, 420), (430, 100, 750, 420)]
+        ring.show(boxes, self.nw.win)
+        pump(self.app, timeout=0.1)
+        with patched(ring.cv, "delete", Spy(wraps=ring.cv.delete)) as spy:
+            for k in range(1, 11):              # the same outline, moved 7 px a frame
+                ring.move([(a + 7 * k, b + 3 * k, c + 7 * k, d + 3 * k) for a, b, c, d in boxes])
+                pump(self.app, timeout=0.01)
+        self.assertEqual(spy.call_count, 0)
+        self.assertEqual(ring.top.winfo_rootx() - ring._frame[0], 0)
+        ring.hide()
+
     def test_no_save_mid_gesture(self):
         a, b, c = self.group_of_three()
         x, y = a.pad.x + 60, a.pad.y + 10
