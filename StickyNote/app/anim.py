@@ -51,10 +51,12 @@ import math  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 import tkinter as tk  # noqa: E402
+import weakref  # noqa: E402
 
 import perf  # noqa: E402
 import winapi  # noqa: E402
 
+BATCH_MOVES = True              # a frame's window moves go to Windows in one DeferWindowPos (spike S2)
 GRID = 1 / 60                   # the frame grid when DWM cannot tell the display's timing
 AHEAD, EARLY = 0.004, 0.002     # aim at the first vblank at least 4 ms away, 2 ms before it
 TIMING_TTL = 0.5                # DWM timing is read again this often
@@ -112,6 +114,8 @@ class FrameClock:
         self._anims: dict = {}                      # (id(owner), key) -> _Anim
         self._requests: dict = {}                   # fn -> None, in order: run once at the next tick
         self._moves: dict = {}                      # the frame's window moves (move / _flush)
+        self._boxes = weakref.WeakKeyDictionary()   # window -> the box a glide last put it at
+        self._geometry_only = weakref.WeakSet()     # windows Tk did not follow after DeferWindowPos
         self._job = None
         self._grid0: float | None = None            # the loop's start: the fallback grid
         self._timing = None                         # (vblank, period) or None
@@ -320,9 +324,76 @@ class FrameClock:
         else:
             self._went_idle()
 
+    # ---- windows ----------------------------------------------------------------------------
+    def move(self, win, x: int, y: int, w: int | None = None, h: int | None = None) -> None:
+        """Put ``win`` there (and size it, with w and h) at this frame's end, together with every
+        other window moved in the frame (one DeferWindowPos). The last move per window wins."""
+        self._moves[id(win)] = (win, int(x), int(y), None if w is None else int(w), None if h is None else int(h))
+        self._wake()
+
+    def box_now(self, win) -> tuple | None:
+        """The box a glide last put ``win`` at."""
+        try:
+            return self._boxes.get(win)
+        except TypeError:
+            return None
+
+    def glide(self, win, to, ms: int, *, frm=None, done=None, sized: bool = False, write_extra=None,
+              ease=ease_out) -> None:
+        """Glide ``win`` to the box ``to`` (x0, y0, x1, y1): a tween on its "box" channel, so a
+        later glide turns from where it is. ``sized``: its size changes on the way too."""
+        def read():
+            b = self.box_now(win)
+            if b is not None:
+                return b
+            x, y = win.winfo_rootx(), win.winfo_rooty()
+            return x, y, x + win.winfo_width(), y + win.winfo_height()
+
+        def write(v):
+            b = tuple(int(round(c)) for c in v)
+            self._boxes[win] = b
+            if sized:
+                self.move(win, b[0], b[1], b[2] - b[0], b[3] - b[1])
+            else:
+                self.move(win, b[0], b[1])
+            if write_extra is not None:
+                write_extra(b)
+        self.tween(win, "box", tuple(to), ms, read=read, write=write, ease=ease, frm=frm, done=done)
+
     def _flush(self, now: float) -> None:
-        """Apply the frame's window moves (see move)."""
-        self._moves.clear()
+        """Apply the frame's window moves: one DeferWindowPos for all of them (BATCH_MOVES),
+        else (or for a window where Tk did not follow) one geometry() each."""
+        if not self._moves:
+            return
+        moves, self._moves = list(self._moves.values()), {}
+        live = []
+        for m in moves:
+            try:
+                if m[0].winfo_exists():
+                    live.append(m)
+            except tk.TclError:
+                pass
+        batch = [m for m in live if BATCH_MOVES and m[0] not in self._geometry_only]
+        rest = [m for m in live if m not in batch]
+        if batch:
+            hwnds = [winapi.hwnd_of(m[0]) for m in batch]
+            if all(hwnds) and winapi.defer_move([(h, x, y, w, hh) for h, (_win, x, y, w, hh) in zip(hwnds, batch)]):
+                for m in batch:
+                    win, x, y = m[0], m[1], m[2]
+                    try:
+                        if (win.winfo_rootx(), win.winfo_rooty()) != (x, y):
+                            self._geometry_only.add(win)        # Tk did not follow: geometry() from now on
+                            print(f"anim: {win} falls back to geometry()", file=sys.stderr)
+                            rest.append(m)
+                    except tk.TclError:
+                        pass
+            else:
+                rest += batch
+        for win, x, y, w, h in rest:
+            try:
+                win.geometry(f"{w}x{h}+{x}+{y}" if w is not None and h is not None else f"+{x}+{y}")
+            except tk.TclError:
+                pass
 
     # ---- going quiet ------------------------------------------------------------------------
     def _went_idle(self) -> None:
