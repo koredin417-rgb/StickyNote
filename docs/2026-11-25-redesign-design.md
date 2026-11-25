@@ -649,3 +649,12 @@ Recorded 2026-11-26 with `tools/baseline.py phase2` (`docs/perf/phase2.json`). D
 - **Not real frame gaps:** `canvas:paging` max 128.7 ms, calendar `box`/`alpha` 58 ms, and `alpha` p95 102 ms in `open_close_50`. These are gaps *between* separate animations that start less than 250 ms apart, which the harness counts as intervals. Real paging frames: p50 14.6, p95 17.4.
 
 **S2 re-run (2026-11-26):** batch OK on one monitor (0 px drift). A second monitor is still untested.
+
+**Re-measured after the review fixes (2026-11-26):** this time with a mainloop-like pump (no harness sleep), on 20 open notes, 6 glides of ±120 px each:
+
+| Glide | n | p50 | p95 | max |
+|---|---|---|---|---|
+| 1 note moving | 102 | 14.0 | 14.0 | 14.1 |
+| 20 notes moving together | 103 | 14.0 | 14.0 | 14.6 |
+
+**Done criterion:** met for moving glides (p95 14.0 ms against the 13.9 ms period). Mass *resize* glides still step at every second vblank (about 28 ms); this is accepted for Phase 2 and left to Phase 4. S2 on a second monitor is still untested.
