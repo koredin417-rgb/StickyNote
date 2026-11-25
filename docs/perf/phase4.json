@@ -3,28 +3,28 @@
  "period_ms": 13.91,
  "group_drag": {
   "n": 60,
-  "p50": 6.4,
-  "p95": 7.0,
-  "max": 7.4,
+  "p50": 4.9,
+  "p95": 5.4,
+  "max": 5.8,
   "over_period": 0,
   "over_2x": 0,
   "group_size": 16
  },
  "solo_resize": {
   "n": 60,
-  "p50": 13.6,
-  "p95": 17.2,
-  "max": 18.7,
+  "p50": 13.5,
+  "p95": 17.3,
+  "max": 17.8,
   "over_period": 23,
   "over_2x": 0,
   "group_size": 16
  },
  "group_resize": {
   "n": 60,
-  "p50": 17.9,
-  "p95": 20.8,
-  "max": 26.3,
-  "over_period": 59,
+  "p50": 15.7,
+  "p95": 19.7,
+  "max": 27.3,
+  "over_period": 41,
   "over_2x": 0,
   "group_size": 16
  }

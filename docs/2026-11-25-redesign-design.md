@@ -715,9 +715,9 @@ Two rare ones are deferred (see the PR).
 
 | Gesture | Before: p50 / p95 / max (ms) | After: p50 / p95 / max (ms) | Frames over 2× the period, before → after |
 |---|---|---|---|
-| Group drag | 14.3 / 19.8 / 21.3 | 6.4 / 7.0 / 7.4 | 0 → 0 (over 1×: 41 → 0) |
-| Single-note resize (live plan) | 14.9 / 18.6 / 24.0 | 13.6 / 17.2 / 18.7 | 0 → 0 |
-| Group resize (covers) | 38.4 / 44.9 / 176 | 17.9 / 20.8 / 26.3 | 60 → 0 |
+| Group drag | 14.3 / 19.8 / 21.3 | 4.9 / 5.4 / 5.8 | 0 → 0 (over 1×: 41 → 0) |
+| Single-note resize (live plan) | 14.9 / 18.6 / 24.0 | 13.5 / 17.3 / 17.8 | 0 → 0 |
+| Group resize (covers) | 38.4 / 44.9 / 176 | 15.7 / 19.7 / 27.3 | 60 → 0 |
 
 **Done criterion met:** no frame over 2× the period in any gesture.
 
