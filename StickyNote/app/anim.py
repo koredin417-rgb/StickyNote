@@ -110,7 +110,7 @@ class _Anim:
 class FrameClock:
     def __init__(self, root: tk.Misc):
         self.root = root
-        self.mode = "full"                          # "full" | "reduced" | "off" (App.set_motion)
+        self.mode = "full"                          # "full" | "reduced" | "off" (App.apply_motion)
         self._anims: dict = {}                      # (id(owner), key) -> _Anim
         self._requests: dict = {}                   # fn -> None, in order: run once at the next tick
         self._moves: dict = {}                      # the frame's window moves (move / _flush)
@@ -152,6 +152,8 @@ class FrameClock:
         step (the widget is gone) ends it quietly. It takes its first step at once."""
         k = (id(owner), key)
         self._anims.pop(k, None)
+        if self.mode == "off" or (self.mode == "reduced" and ms > FAST):
+            ms = 0                                  # (the Animations setting: no motion)
         a = _Anim(owner, key, time.perf_counter(), ms, ease, done)
         a.step = step
         try:
@@ -171,6 +173,10 @@ class FrameClock:
         is moving already it turns toward ``to`` from where it is, keeping its speed (no snap)."""
         k = (id(owner), channel)
         now = time.perf_counter()
+        if self.mode == "off" or (self.mode == "reduced" and channel != "alpha"):
+            ms = 0                                  # (the Animations setting: no motion; Reduced keeps fades)
+        elif self.mode == "reduced":
+            ms = min(ms, FAST)
         scalar = not isinstance(to, (tuple, list))
         v1 = (float(to),) if scalar else tuple(float(v) for v in to)
         old = self._anims.pop(k, None)

@@ -156,6 +156,7 @@ class App:
 
         data = self.store.load()
         self.prefs = data.prefs
+        self.apply_motion()                         # Animations: the user's choice, else Windows' setting
         Colors.keep_solid(self.prefs.solid_colors)      # Settings: strong colors painted solid all the same
         self._load_setup(data.pads)                 # N5: the copies of this screen setup (before any window)
         set_shared("BIN_DAYS", self.prefs.bin_days)     # Settings: how long the bin keeps memos
@@ -326,6 +327,20 @@ class App:
         self.request_save()
         for w in self.windows.values():
             w.apply_look()
+
+    def apply_motion(self):
+        """The clock's mode: the Animations setting, or when none was chosen, Windows' own
+        "Show animations" (off there: off here)."""
+        self.clock.mode = self.prefs.motion or ("full" if winapi.client_animations_enabled() else "off")
+
+    def set_motion(self, mode):
+        """Animations: "full", "reduced" or "off"; None goes back to following Windows."""
+        self.prefs.motion = mode if mode in ("full", "reduced", "off") else None
+        self.apply_motion()
+        self.request_save()
+        for w in self.windows.values():
+            if w.view == "settings":
+                w.settings_view.sync()
 
     def set_minimize_style(self, style):
         """Minimize folds the note away (back from the taskbar button) or leaves a sticker."""
@@ -1799,6 +1814,7 @@ class App:
             return
         try:
             self.check_screens()
+            self.apply_motion()                     # (Windows' animation setting may have changed)
         finally:
             if not self.closed:
                 self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)

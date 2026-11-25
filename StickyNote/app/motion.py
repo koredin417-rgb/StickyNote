@@ -21,11 +21,12 @@ import tkinter as tk
 
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import GLIDE_MS, TIP_KEY, accent_color, animating, stop_animation
+from ui_common import GLIDE_MS, TIP_KEY, _alpha, accent_color, animating, fade, stop_animation
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
 CLICK_THROUGH_ALPHA = 0.999
+CROSSFADE_MS = 60               # Animations: Reduced: a moving window fades out this fast, jumps, fades back
 
 
 def _size(b):
@@ -255,6 +256,9 @@ class Motion:
         if win is None:
             return
         cal = self._calendar() if item.id == CAL else None
+        if self.app.clock.mode == "reduced":    # Animations: Reduced: it fades out, jumps, fades in
+            self._crossfade(item, win, cal)
+            return
 
         def extra(b, item=item):
             item.now = b
@@ -262,6 +266,18 @@ class Motion:
                 cal._xy = (b[0], b[1])
         self.app.clock.glide(win, item.end, item.ms, frm=item.start, sized=item.sized and item.id != CAL,
                              write_extra=extra, done=lambda item=item: self._got_there(item))
+
+    def _crossfade(self, item, win, cal):
+        clock = self.app.clock
+        clock.stop(win, "box")
+        back = cal._target_alpha() if cal is not None else item.pad.alpha if item.pad is not None else 1.0
+
+        def jumped():
+            if self._items.get(item.id) is not item:
+                return
+            self._show(item, 1.0)
+            fade(win, "alpha", 0.0, back, CROSSFADE_MS, done=lambda: self._got_there(item))
+        fade(win, "alpha", _alpha(win), 0.0, CROSSFADE_MS, done=jumped)
 
     def _stop_glide(self, pid):
         win = self._window(pid)

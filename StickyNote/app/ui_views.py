@@ -761,13 +761,13 @@ class MemoPreview:
 SETTING_GROUPS = (
     ("grp_memo", ("set_color", "set_font")),
     ("grp_look", ("set_default_color", "set_theme_color", "set_cursor", "set_transparency")),
-    ("grp_place", ("set_snap", "set_auto_layout", "set_minimize")),
+    ("grp_place", ("set_snap", "set_auto_layout", "set_minimize", "set_motion")),
     ("grp_general", ("set_language", "set_date_format", "set_pin_limit", "set_bin_days")),
 )
 SETTING_HELP = {
     "set_color": "help_color", "set_font": "help_font", "set_default_color": "help_default_color",
     "set_theme_color": "help_theme_color", "set_cursor": "help_cursor", "set_transparency": "help_transparency",
-    "set_snap": "help_snap", "set_auto_layout": "help_auto_layout", "set_minimize": "tip_minimize_style",
+    "set_snap": "help_snap", "set_auto_layout": "help_auto_layout", "set_minimize": "tip_minimize_style", "set_motion": "help_motion",
     "set_language": "help_language", "set_date_format": "help_date_format", "set_pin_limit": "help_pin_limit",
     "set_bin_days": "help_bin_days",
 }
@@ -911,6 +911,17 @@ class SettingsView:
             self.min_buttons[style] = b
             self.flat.append(b)
 
+        body = page("set_motion")
+        row = tk.Frame(body, bd=0)
+        row.pack(fill="x", **pad)
+        self.rows.append(row)
+        self.motion_buttons = {}
+        for i, mode in enumerate(("full", "reduced", "off")):
+            b = FlatButton(row, tr(f"motion_{mode}"), lambda m=mode: self.app.set_motion(m))
+            b.grid(row=0, column=i, sticky="w", padx=(0, px(4)))
+            self.motion_buttons[mode] = b
+            self.flat.append(b)
+
         body = page("set_bin_days")
         row = tk.Frame(body, bd=0)
         row.pack(fill="x", **pad)
@@ -996,6 +1007,7 @@ class SettingsView:
             "set_snap": lambda: tr("snap_off") if prefs.snap_gap is None else f"{prefs.snap_gap}px",
             "set_auto_layout": lambda: tr("auto_on" if prefs.auto_layout else "auto_off"),
             "set_minimize": lambda: tr(f"min_{prefs.minimize_style}"),
+            "set_motion": lambda: tr(f"motion_{self.app.clock.mode}"),
             "set_language": lambda: dict(texts.LANGUAGES).get(texts.language(), ""),
             "set_date_format": lambda: texts.day_label(date.today(), texts.date_format()),
             "set_pin_limit": lambda: str(prefs.pin_limit),
@@ -1229,7 +1241,8 @@ class SettingsView:
             prefs = self.app.prefs
             for buttons, now in ((self.snap_buttons, prefs.snap_gap), (self.cursor_buttons, prefs.cursor_color),
                                  (self.bin_buttons, prefs.bin_days), (self.auto_buttons, prefs.auto_layout),
-                                 (self.min_buttons, prefs.minimize_style)):
+                                 (self.min_buttons, prefs.minimize_style),
+                                 (self.motion_buttons, prefs.motion)):
                 for value, b in buttons.items():
                     chosen = value == now
                     b._bg = c.select if chosen else c.well
