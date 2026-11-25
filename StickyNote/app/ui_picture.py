@@ -285,7 +285,11 @@ class ImageViewer:
         s = self._fit * zoom
         self.offset = (sx - x / s, sy - y / s)    # keep that pixel under the pointer
         self._clamp()
-        self._draw_picture()
+        self._draw_soon()
+
+    def _draw_soon(self):
+        """Pan / zoom: drawn once at the next display frame, however many moves came before it."""
+        self.nw.app.clock.request(self._draw_picture)
 
     def fit(self):
         if self.has_picture and self.zoom != 1:
@@ -318,7 +322,7 @@ class ImageViewer:
             s = self._fit * self.zoom
             self.offset = (ox - (event.x - x0) / s, oy - (event.y - y0) / s)
             self._clamp()
-            self._draw_picture()
+            self._draw_soon()
 
     def _release(self, event):
         self._pan = None

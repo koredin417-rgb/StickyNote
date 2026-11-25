@@ -239,5 +239,76 @@ class QuietGestureTest(InteractTest):
             self.assertGreaterEqual(spy.call_count, 1)
 
 
+class PerFrameTest(InteractTest):
+    """Task 6: picture pan / zoom, the calendar's grip and its range drag, once per frame."""
+
+    test_one_apply_per_frame = QuietGestureTest.test_one_apply_per_frame
+    test_group_moves_in_one_batch = test_release_flushes_latest_pointer = test_one_apply_per_frame
+    test_resize_one_plan_per_frame = test_live_plan_matches_per_event = test_one_apply_per_frame
+
+    def test_picture_pan_renders_once_per_frame(self):
+        from PIL import Image
+        nw = self.nw
+        nw.set_style("image")
+        nw.add_image(Image.new("RGB", (1600, 1200), "#3366AA"))
+        self.settle()
+        v = nw.viewer
+        v.zoom_at(40, 40, 3.0)
+        self.frame()
+        v._press(SimpleNamespace(x=60, y=60))
+        with patched(v, "_draw_picture", Spy(wraps=v._draw_picture)) as spy:
+            for k in range(1, 4):
+                v._move(SimpleNamespace(x=60 - 10 * k, y=60 - 6 * k))
+            self.assertEqual(spy.call_count, 0)
+            self.frame()
+            self.assertEqual(spy.call_count, 1)
+            for k in range(3):
+                v.zoom_at(50, 50, 1.2)
+            self.frame()
+            self.assertEqual(spy.call_count, 2)
+
+    def open_big_calendar(self):
+        self.nw.toggle_calendar()
+        self.settle()
+        cal = self.nw.calendar
+        cal.click_view("big")
+        self.settle(0.6)
+        return cal
+
+    def test_calendar_grip_draws_once_per_frame(self):
+        cal = self.open_big_calendar()
+        g = cal.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        cal._resize_start(ev(x, y))
+        with patched(cal, "draw", Spy(wraps=cal.draw)) as spy:
+            for k in range(1, 4):
+                cal._resize_move(ev(x + 8 * k, y + 5 * k))
+            self.assertEqual(spy.call_count, 0)
+            self.frame()
+            self.assertEqual(spy.call_count, 1)
+        cal._resize_end(ev(x + 24, y + 15))
+        self.settle()
+
+    def test_range_card_only_on_change(self):
+        import ui_calendar
+        cal = self.open_big_calendar()
+        cells = [c for c in cal._cells if c[4].month == cal.month[1]]
+        a, b, c = cells[8], cells[9], cells[10]
+        cal._chip_drag = {"note": None, "day": a[4], "moving": False}
+
+        def at(cell, dx):
+            x, y = cell[0] + dx, cell[1] + 10
+            return SimpleNamespace(x=x, y=y, x_root=cal.grid.winfo_rootx() + x, y_root=cal.grid.winfo_rooty() + y)
+        with patched(ui_calendar, "_rounded_card", Spy(wraps=ui_calendar._rounded_card)) as spy:
+            cal._range_move(at(b, 5))
+            cal._range_move(at(b, 25))                  # the same days: the card only moves
+            self.assertEqual(spy.call_count, 1)
+            cal._range_move(at(c, 5))
+            self.assertEqual(spy.call_count, 2)
+        cal._hide_count()
+        cal.grid.delete("ghost")
+        cal._chip_drag = None
+
+
 if __name__ == "__main__":
     unittest.main()

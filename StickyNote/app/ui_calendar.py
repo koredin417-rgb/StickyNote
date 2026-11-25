@@ -820,9 +820,9 @@ class CalendarPopup:
         w, h = max(min(b[2] - b[0] + dx, mw), lw), max(min(b[3] - b[1] + event.y_root - y0, mh), lh)
         self._grip_size = (w, h)
         self.fit_size = (w, h)
-        self.top.geometry(f"{w}x{h}+{b[2] - w if left else b[0]}+{b[1]}")
-        if not self._resize_job:                # redraw once per idle moment, not per mouse move
-            self._resize_job = self.top.after_idle(self._draw_live)
+        clock = self.app.clock                  # the size and the redraw: once a display frame
+        clock.move(self.top, b[2] - w if left else b[0], b[1], w, h)
+        clock.request(self._draw_live)
 
     def _draw_live(self):
         self._resize_job = None
@@ -833,9 +833,8 @@ class CalendarPopup:
         if not self._resize:
             return
         self._resize = None
-        if self._resize_job:
-            self.top.after_cancel(self._resize_job)
-            self._resize_job = None
+        if self.app.clock.take(self._draw_live):    # (let go before the frame: its size first)
+            self.app.clock.flush_moves()
         size, self._grip_size = self._grip_size, None
         b0 = self._resize_from
         if size is not None and size != (b0[2] - b0[0], b0[3] - b0[1]):
@@ -1324,6 +1323,10 @@ class CalendarPopup:
         """While dragging across days: a small theme card by the mouse, "11/10 ~ 11/13 · 4 days"."""
         c, px = self.colors, self.app.px
         top = getattr(self, "_count_top", None)
+        if top is not None and getattr(self, "_count_key", None) == (a, b) and top.winfo_ismapped():
+            top.geometry(f"+{event.x_root + px(16)}+{event.y_root + px(18)}")      # (built: it moves)
+            return
+        self._count_key = (a, b)
         if top is None:
             top = self._count_top = tk.Toplevel(self.top)
             top.withdraw()
@@ -1354,6 +1357,7 @@ class CalendarPopup:
         top.lift()
 
     def _hide_count(self):
+        self._count_key = None
         top = getattr(self, "_count_top", None)
         if top is not None:
             top.withdraw()
@@ -1417,6 +1421,10 @@ class CalendarPopup:
             d["moving"] = True
         d["end"] = day
         a, b = sorted((d["day"], day))
+        if d.get("drawn") == (a, b):           # the same days: only the card follows the mouse
+            self._count_card(event, a, b)
+            return
+        d["drawn"] = (a, b)
         g.delete("ghost")
         color = self.app.prefs.default_color or self.nw.note.color
         line = self._mark(color)
