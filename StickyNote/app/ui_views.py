@@ -30,7 +30,10 @@ from ui_common import *  # noqa: F401,F403  (the parts before this one)
 
 # --------------------------------------------------------------------------- list page
 CARD_GUESS, HEAD_GUESS = 96, 28    # a row's height (px at 100 %) until it is made and measured
-KEEP_SCREENS = 1                 # rows this many screens above and below the view are made too
+KEEP_SCREENS = 1                 # rows this many screens above and below the view are made too ...
+BUILD_PER_PASS = 2               # ... a couple at a time (the rows in view at once): a far jump stays quick
+BUILD_AGAIN_MS = 15              # ... the next couple this much later
+DROP_PER_PASS, DROP_AGAIN_MS = 3, 40   # rows let go of are hidden at once, destroyed a few at a time later
 
 
 class _Row:
@@ -96,10 +99,14 @@ class ListView:
         self.area.canvas.pack(fill="both", expand=True)
         self.area.canvas.bind("<Configure>", self._on_resize, add="+")
         self.area.listen(self._sync_soon)       # scrolled: the rows near the view are made
+        self.area.fine_steps(px(24))            # (to the pixel: the view follows a row being measured)
+        self.area.inner.unbind("<Configure>")   # (its scroll room is set here, from the rows' heights)
         self.rows: list[_Row] = []
         self._heights: dict = {}                # (kind, key, width) -> its height, measured
         self._total = 0
         self._sync_job = None
+        self._trash: list = []                  # rows' widgets let go of, destroyed a few at a time
+        self._trash_job = None
         self._width = 0
         self.cards: dict = {}           # note id -> (outer frame, card frame)
         self.pin_icons: dict = {}       # note id -> its pin icon
@@ -138,7 +145,16 @@ class ListView:
 
     # -- drawing
     def release(self):
-        """The window is closing: the search trace (held by Tcl) would keep it alive."""
+        """The window is closing: the search trace (held by Tcl) would keep it alive; the list's
+        own waiting passes go too."""
+        for job in (self._sync_job, self._trash_job):
+            if job is not None:
+                try:
+                    self.frame.after_cancel(job)
+                except tk.TclError:
+                    pass
+        self._sync_job = self._trash_job = None
+        self._trash = []
         name, self._search_trace = self._search_trace, None
         if name is not None:
             try:
@@ -167,6 +183,7 @@ class ListView:
             self.nw.win.after_cancel(job)
         for child in self.area.inner.winfo_children():
             child.destroy()
+        self._trash = []                    # (destroyed with the rest)
         self._shown = []
         self.bin_icons, self.cards, self.pin_icons = {}, {}, {}
         self.sections, self.sort_switch = {}, None
@@ -208,7 +225,11 @@ class ListView:
 
     def _sync_soon(self):
         if self._sync_job is None:
-            self._sync_job = self.frame.after_idle(self._sync_window)
+            self._sync_job = self.frame.after_idle(self._sync_later)
+
+    def _sync_later(self):
+        self._sync_job = None
+        self._sync_window()
 
     def _sync_window(self):
         """Make the rows within KEEP_SCREENS of the view and let go of the others; each row sits
@@ -219,38 +240,71 @@ class ListView:
             except tk.TclError:
                 pass
             self._sync_job = None
+        if getattr(self, "_syncing", False):    # (asked again while making a row: once this one is done)
+            self._resync = True
+            return
+        self._syncing = True
+        try:
+            self._sync_rows()
+        finally:
+            self._syncing = False
+        if getattr(self, "_resync", False):
+            self._resync = False
+            self._sync_soon()
+
+    def _sync_rows(self):
         cv = self.area.canvas
         try:
             view = cv.winfo_height() if cv.winfo_height() > 1 else self.nw.pad.height
             top = cv.canvasy(0)
         except tk.TclError:
             return
+        # the row at the top of the view stays put on the screen while rows above it are made and
+        # measured (their heights were guesses): the view follows it
+        anchor = next((r for r in self.rows if r.y + r.height > top), None)
+        offset = top - anchor.y if anchor is not None else 0
         lo, hi = top - view * KEEP_SCREENS, top + view * (1 + KEEP_SCREENS)
+        y, budget, more, made = 0, BUILD_PER_PASS, False, []
+        for r in self.rows:                 # what is near the view is made (unmeasured yet) ...
+            near = y < hi and y + r.height > lo
+            if near and r.widget is None:
+                seen = y < top + view and y + r.height > top
+                if seen or budget > 0:
+                    budget -= 0 if seen else 1
+                    self._make_row(r, y)
+                    made.append(r)
+                else:
+                    more = True
+            elif not near and r.widget is not None:
+                self._drop_row(r)
+            y += r.height
+        if made:                            # ... and measured together: one layout pass, not one a row
+            self.area.inner.update_idletasks()
+            for r in made:
+                h = r.widget.winfo_reqheight()
+                more = more or h < r.height     # (shorter than guessed: more rows may come near)
+                r.height = self._heights[(r.kind, r.key, self._width)] = h
         y = 0
-        for r in self.rows:
+        for r in self.rows:                 # each row where the rows above it end
             if r.y != y:
                 r.y = y
                 if r.widget is not None:
                     r.widget.place_configure(y=y)
-            near = y < hi and y + r.height > lo
-            if near and r.widget is None:
-                self._make_row(r)
-            elif not near and r.widget is not None:
-                self._drop_row(r)
             y += r.height
         if y != self._total:
             self._total = y
             self.area.inner.configure(height=max(1, y))
             cv.configure(scrollregion=(0, 0, max(1, cv.winfo_width()), max(1, y)))
+        if anchor is not None and anchor.y + offset != top and y > 0:
+            cv.yview_moveto((anchor.y + offset) / y)
+        if more:
+            self._sync_job = self.frame.after(BUILD_AGAIN_MS, self._sync_later)
 
-    def _make_row(self, r):
+    def _make_row(self, r, y):
         box = tk.Frame(self.area.inner, bg=self.nw.colors.bg, bd=0)
-        box.place(x=0, y=r.y, relwidth=1)
+        box.place(x=0, y=y, relwidth=1)
         r.widget = box
         r.make(box)
-        box.update_idletasks()
-        r.height = box.winfo_reqheight()
-        self._heights[(r.kind, r.key, self._width)] = r.height
         if r.kind == "card" and r.key == self._picked and r.key in self._painters:
             self._painters[r.key](True)
 
@@ -267,9 +321,26 @@ class ListView:
             if r.key == "others":
                 self.sort_switch = None
         try:
-            box.destroy()
+            box.place_forget()              # (out of sight now; destroying ~10 cards took a frame)
         except tk.TclError:
-            pass
+            return
+        self._trash.append(box)
+        if self._trash_job is None:
+            self._trash_job = self.frame.after(DROP_AGAIN_MS, self._empty_trash)
+
+    def _empty_trash(self):
+        self._trash_job = None
+        batch, self._trash = self._trash[:DROP_PER_PASS], self._trash[DROP_PER_PASS:]
+        for box in batch:
+            try:
+                box.destroy()
+            except tk.TclError:
+                pass
+        if self._trash:
+            try:
+                self._trash_job = self.frame.after(DROP_AGAIN_MS, self._empty_trash)
+            except tk.TclError:
+                self._trash = []
 
     def _bin_badge(self):
         """The way into the bin: its icon with a red dot on its corner while the bin holds memos (badge

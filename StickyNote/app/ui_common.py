@@ -1297,6 +1297,12 @@ class ScrollArea:
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._item, width=e.width))
         self.scroll = OverlayScroll(self.canvas, app)
         self._listeners: list = []
+        self.step = 1                       # units a wheel notch scrolls (see fine_steps)
+
+    def fine_steps(self, notch):
+        """Scroll to the pixel (the view can be put anywhere), ``notch`` px a wheel notch."""
+        self.canvas.configure(yscrollincrement=1)
+        self.step = notch
 
     def listen(self, fn):
         """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
@@ -1311,7 +1317,7 @@ class ScrollArea:
 
     def wheel(self, event):
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            self.canvas.yview_scroll((-1 if event.delta > 0 else 1) * self.step, "units")
 
     def to_top(self):
         self.canvas.yview_moveto(0)
