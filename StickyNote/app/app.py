@@ -47,6 +47,7 @@ import grid
 import holidays
 import space
 import texts
+import gc
 import perf
 import winapi
 from geom import Box, Screen
@@ -88,6 +89,11 @@ class App:
     def __init__(self, folder, root: tk.Tk | None = None, signal_file: Path | None = None,
                  screens: list[Screen] | None = None):
         # tests: these screens stand in for the real monitors (see screens()), from the start
+        # what the imports made (modules, classes, constants) lives for good: the collector stops
+        # walking it. Done before any window or memo exists: frozen objects are never freed,
+        # and a window has to be freed when it closes (NoteWindow._release)
+        gc.collect()
+        gc.freeze()
         self._fake_screens = list(screens) if screens is not None else None
         self._screens = None                        # the real monitors, read once (screens())
         self.store = NoteStore(folder)

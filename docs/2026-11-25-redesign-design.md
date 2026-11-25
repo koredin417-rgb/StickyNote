@@ -185,7 +185,7 @@ clock.tween(owner, channel, to, token="long", curve=None, done=None, frm=None) -
 
 #### 5.1.5 Garbage collection and the clock
 
-- **After startup:** call `gc.freeze()` once the first windows are shown.
+- **At the start of `App.__init__`**, before any window or memo exists: `gc.collect()` then `gc.freeze()`. *(Changed in Phase 1: freezing after the first windows were shown made those windows impossible to free when closed, since frozen objects are never collected.)*
 - **The 30 ms `collect_garbage()` call is removed** (see §5.6). Instead, `clock.idle(collect)` runs a collection 1 s after the clock goes idle, and every 10 s at most while the app sits idle with no animation.
 - **During animation:** no collection runs while the clock is active.
 - **Cycles:** cycles made while animating are collected at the next idle.
