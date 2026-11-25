@@ -600,17 +600,30 @@ class NoteWindow:
         if not box:
             self.preedit.place_forget()
             return
-        n, c = self.note, self.colors
+        c = self.colors
         fmt = self._formats_at_cursor()
-        style = [s for s, k in (("bold", "b"), ("italic", "i")) if k in fmt]
-        font = tkfont.Font(self.win, family=n.font_family, size=n.font_size, underline=True,
-                           weight="bold" if "bold" in style else "normal",
-                           slant="italic" if "italic" in style else "roman")
+        font = self._preedit_font_for("b" in fmt, "i" in fmt)
         self._preedit_font = font
         x, y, _w, h = box
-        self.preedit.configure(text=text, font=font, bg=c.bg, fg=c.fg)
-        self.preedit.place(x=x, y=y, height=h, bordermode="ignore")   # bbox counts from the outer edge
+        shown = (text, box, font, c.bg, c.fg)
+        if shown != getattr(self, "_preedit_last", None) or not self.preedit.winfo_ismapped():
+            self._preedit_last = shown
+            self.preedit.configure(text=text, font=font, bg=c.bg, fg=c.fg)
+            self.preedit.place(x=x, y=y, height=h, bordermode="ignore")   # bbox counts from the outer edge
         self._later("preedit", 120, self._show_preedit)
+
+    def _preedit_font_for(self, bold: bool, italic: bool) -> tkfont.Font:
+        """The underlined font the syllable being typed is shown in, made once per style
+        (it was made anew at every key and every 120 ms check)."""
+        n = self.note
+        key = (n.font_family, n.font_size, bold, italic)
+        fonts = self.__dict__.setdefault("_preedit_fonts", {})
+        font = fonts.get(key)
+        if font is None:
+            font = fonts[key] = tkfont.Font(self.win, family=n.font_family, size=n.font_size, underline=True,
+                                            weight="bold" if bold else "normal",
+                                            slant="italic" if italic else "roman")
+        return font
 
     def _draw_period_band(self):
         cv, c, px, note = self.period_band, self.colors, self.app.px, self.note
