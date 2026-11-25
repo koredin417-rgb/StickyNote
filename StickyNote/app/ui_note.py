@@ -283,7 +283,7 @@ class NoteWindow:
         # ---- resize grip, bottom-right
         g = px(12)
         self.grip = tk.Canvas(self.frame, width=g, height=g, bd=0, highlightthickness=0, cursor="size_nw_se")
-        self.grip.place(relx=1, rely=1, anchor="se")
+        self._place_grip()
         self.grip.bind("<ButtonPress-1>", self._resize_start)
         self.grip.bind("<B1-Motion>", self._resize_move)
         self.grip.bind("<ButtonRelease-1>", self._drag_end)
@@ -999,6 +999,11 @@ class NoteWindow:
         self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
         if hasattr(self, "bar"):
             self.bar.configure(height=self._row_h())
+
+    def _place_grip(self):
+        """Bottom right; a little in from the corner when DWM rounds it (else the round cuts it)."""
+        inset = 0 if self.edge else self.app.px(3)
+        self.grip.place(relx=1, rely=1, anchor="se", x=-inset, y=-inset)
 
     def _row_h(self):
         """The date row's height: with the window's edge, a folded note is DATE_ROW_H tall."""
@@ -2529,7 +2534,7 @@ class NoteWindow:
         row = box(self.bar)[3]
         close = box(self.btn_close)[0] if self.btn_close.winfo_ismapped() else fw
         more = box(self.btn_more)[1] if rail else fh
-        g = self.grip.winfo_width() if self.grip.winfo_ismapped() else 0
+        grip = box(self.grip) if self.grip.winfo_ismapped() else (fw, fh, fw, fh)
         cover = tk.Canvas(self.win, bd=0, highlightthickness=0, bg=self.colors.bg)
         bars = []
         if rail:
@@ -2546,7 +2551,7 @@ class NoteWindow:
         piece((close, 0, fw, row), lambda W, H: (W - (fw - close), 0), ("close",))  # ×
         piece((0, 0, rail, more), lambda W, H: (0, 0))                              # the rail's buttons
         piece((0, more, rail, fh), lambda W, H: (0, H - (fh - more)))               # ... and its ⋯
-        piece((fw - g, fh - g, fw, fh), lambda W, H: (W - g, H - g))                # the resize grip
+        piece(grip, lambda W, H: (W - (fw - grip[0]), H - (fh - grip[1])))         # the resize grip
 
         def lay(W, H):
             for item, where in bars + pieces:
@@ -2582,7 +2587,7 @@ class NoteWindow:
             self.win.geometry(f"{p.width}x{p.shown_height}")
         else:
             self.views.pack(fill="both", expand=True)
-            self.grip.place(relx=1, rely=1, anchor="se")
+            self._place_grip()
             tk.Misc.tkraise(self.grip)
             self.win.geometry(f"{p.width}x{p.height}")
         self.app.space_changed()            # folded: as tall as its date row

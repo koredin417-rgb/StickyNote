@@ -20,6 +20,7 @@ winapi.set_app_id("KMH.StickyNote.LookCapture")
 from PIL import Image  # noqa: E402
 
 from app import App  # noqa: E402
+from ui_common import MIN_H, MIN_W  # noqa: E402
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "perf"
 LANG = sys.argv[2] if len(sys.argv) > 2 else None
@@ -103,6 +104,13 @@ def steps():
     a.calendar.click_view("big")
     yield 900
     snap("calendar-big")
+    a.close_calendar()
+    yield 600
+    a.set_size(app.px(MIN_W), app.px(MIN_H))   # the smallest note, typing: the rail gives way to ⋯
+    yield 700
+    a.body.focus_force()
+    yield 300
+    snap("small", only=[a.win])
 
 
 def run(gen):

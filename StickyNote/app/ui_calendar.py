@@ -733,10 +733,11 @@ class CalendarPopup:
             grip.place_forget()
             return
         on_left = self.docked and getattr(self, "side", "right") == "left"
+        inset = 0 if self.edge else self.app.px(3)         # in from a corner DWM rounds
         if on_left:
-            grip.place(relx=0, rely=1, anchor="sw")
+            grip.place(relx=0, rely=1, anchor="sw", x=inset, y=-inset)
         else:
-            grip.place(relx=1, rely=1, anchor="se")
+            grip.place(relx=1, rely=1, anchor="se", x=-inset, y=-inset)
         if on_left != getattr(self, "_grip_left", None):
             self._grip_left = on_left
             grip.configure(cursor="size_ne_sw" if on_left else "size_nw_se")
