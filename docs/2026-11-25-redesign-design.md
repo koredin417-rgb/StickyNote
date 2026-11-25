@@ -671,7 +671,7 @@ Checked 2026-11-26 on Windows 11 (build 26300, 100 %), with `tools/look_capture.
 | Date row | Today's day in 22 px bold, with "11월 목요일" / "Thu, Nov" beside it on one baseline, and × on the right. |
 | Folded strip | Exactly `px(PILE_STEP)` (36 at 100 %): the day, then the memo's lines (" · ") cut to fit, and ×. |
 | List, settings, bin | ‹ back, the page's name and × in the date row; the rail stays. |
-| Calendar head | Variant 3: "11" in 28 px bold, "11월" over "2026년" (or "November" over "2026"), then ‹ › ⋯ ×. The this-month icon shows only on another month. |
+| Calendar head | Variant 3: "11" in 28 px bold, "11월" over "2026년", then ‹ › ⋯ ×. The this-month icon shows only on another month. In English the month name is short ("Nov" over "2026") whenever "November" would make the head wider than the mini view, which it does at 100 % and 150 % here. |
 | Corners | DWM rounds the corners and draws its shadow on notes and the calendar (layered too). The 1 px border is used only where that fails. |
 | Smallest note (260 × 170) | Typing: new memo, new window, bold and italic stay; the rest are in ⋯. Not typing: all five nav buttons fit. |
 
@@ -691,5 +691,14 @@ Checked 2026-11-26 on Windows 11 (build 26300, 100 %), with `tools/look_capture.
   - no semibold face is bundled, so the small date text is Pretendard Medium;
   - Tk can't turn on tabular digits.
 - **Resize grips** sit 3 px in from a corner that DWM rounds.
+
+**Review:** a fresh whole-branch review found 0 critical, 2 important and 5 minor issues. Graded by what a user would see, five were fixed with failing tests first (`625caa9`):
+- the rail emptied after an instant unfold;
+- the English head was too wide;
+- a back arrow was left in a folded page strip;
+- every activation of a note re-laid out its rail;
+- the right-click menu could bin a hidden memo.
+
+Two rare ones are deferred (see the PR).
 
 **Not checked:** Windows 10 (none here). The fallback path, a 1 px border with square corners, is covered by tests that force `round_corners` to fail.
