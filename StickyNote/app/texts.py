@@ -99,13 +99,11 @@ def date_row(d: date, lang: str | None = None) -> tuple[str, str]:
     return str(d.day), f"{WEEKDAYS['en'][wd]}, {MONTHS_EN_SHORT[d.month - 1]}"
 
 
-def month_head(year: int, month: int, lang: str | None = None, short: bool = False) -> tuple[str, str, str]:
-    """The calendar's head: the month's number, shown big, and beside it its name over the year
-    ("11", "11월", "2026년" / "11", "November", "2026"; ``short``: "Nov")."""
+def month_head(year: int, month: int, lang: str | None = None) -> tuple[str, str]:
+    """The calendar's head: the month's number, shown big (it names the month: no month name
+    beside it), and the year ("11", "2026년" / "11", "2026")."""
     lang = lang or _current
-    if lang == "ko":
-        return str(month), f"{month}월", f"{year}년"
-    return str(month), (MONTHS_EN_SHORT if short else MONTHS_EN)[month - 1], str(year)
+    return str(month), f"{year}년" if lang == "ko" else str(year)
 
 
 def month_title(year: int, month: int) -> str:

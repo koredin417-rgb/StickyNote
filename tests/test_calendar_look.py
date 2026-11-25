@@ -36,8 +36,12 @@ class CalendarLookTest(unittest.TestCase):
     def test_head_texts(self):
         y, m = self.cal.month
         self.assertEqual(self.cal.head_texts(), list(texts.month_head(y, m)))
-        self.assertEqual(texts.month_head(2026, 11, lang="ko"), ("11", "11월", "2026년"))
-        self.assertEqual(texts.month_head(2026, 11, lang="en"), ("11", "November", "2026"))
+        self.assertEqual(texts.month_head(2026, 11, lang="ko"), ("11", "2026년"))     # the number is the month
+        self.assertEqual(texts.month_head(2026, 11, lang="en"), ("11", "2026"))
+        cv = self.cal.head_cv                           # the year sits beside the number, on its baseline
+        num, year = cv.find_withtag("text")
+        self.assertLess(cv.bbox(num)[2], cv.bbox(year)[0])
+        self.assertLessEqual(abs(cv.bbox(num)[3] - cv.bbox(year)[3]), self.app.px(8))
 
     def test_head_buttons_order(self):
         cal = self.cal

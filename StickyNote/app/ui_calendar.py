@@ -188,25 +188,17 @@ class CalendarPopup:
         self._tiles: dict = {}          # rounded day tiles (smooth, drawn with Pillow)
         self._menu_font = tkfont.Font(top, family=UI_FONT, size=9)     # PopupMenu's: for cutting titles
 
-        # the head (the C look): the month's number, big, with its name over the year beside it; then
+        # the head (the C look): the month's number, big, with the year beside it; then
         # this month (only while another one shows), ‹ ›, ⋯ and ×. Dragging it moves an undocked
         # calendar; a docked one takes its note (and the notes snapped to it) along
         head = self.head = tk.Frame(self.frame, bd=0)
         head.pack(fill="x")
         self._num_font = tkfont.Font(top, family=UI_BOLD, size=-px(CAL_NUM_PX), weight="bold")
-        self._month_font = tkfont.Font(top, family=UI_BOLD, size=-px(CAL_MONTH_PX), weight="bold")
         self._year_font = tkfont.Font(top, family=UI_FONT, size=-px(CAL_YEAR_PX))
-        # as wide as the widest month and year: paging never changes the calendar's width (#17A);
-        # short month names ("Nov") when the long ones would make the head wider than the mini view
-        self._short_month = False
-        for short in (False, True):
-            names = [texts.month_head(2000, m, short=short) for m in range(1, 13)]
-            label_w = max(max(self._month_font.measure(b), self._year_font.measure(c)) for _a, b, c in names)
-            self._head_w = px(6) + max(self._num_font.measure(a) for a, _b, _c in names) + px(6) + label_w + px(6)
-            buttons = 5 * px(24) + px(4) + px(4)            # this month ‹ › ⋯ ×, the two side gaps
-            if self._head_w + buttons <= 7 * px(SMALL_CELL[0]) + 2 * px(4):
-                break
-            self._short_month = True
+        # as wide as the widest month number and year: paging never changes the calendar's width (#17A)
+        num_w = max(self._num_font.measure(texts.month_head(2000, m)[0]) for m in range(1, 13))
+        year_w = max(self._year_font.measure(texts.month_head(y, 1)[1]) for y in range(2000, 2100))
+        self._head_w = px(6) + num_w + px(6) + year_w + px(6)
         self.head_cv = tk.Canvas(head, width=self._head_w, height=self._head_h(), bd=0, highlightthickness=0)
         self.head_cv.pack(side="left", padx=(px(4), 0))
 
@@ -1175,22 +1167,20 @@ class CalendarPopup:
         return self.app.px(DATE_ROW_H) - 2 * self.edge
 
     def _draw_head(self, animated=True):
-        """The month's number, big, and its name over the year beside it; the this-month icon
-        fades in while another month shows, and out on this one (anim.FAST)."""
+        """The month's number, big, and the year beside it on its baseline (as the note's date
+        row: its day, then the month and weekday); the this-month icon fades in while another
+        month shows, and out on this one (anim.FAST)."""
         cv, c, px = self.head_cv, self.colors, self.app.px
         y, m = self.month
-        num, name, year = texts.month_head(y, m, short=self._short_month)
+        num, year = texts.month_head(y, m)
         h = self._head_h()
         cv.delete("all")
-        nf, mf, yf = self._num_font, self._month_font, self._year_font
+        nf, yf = self._num_font, self._year_font
         x = px(6)
         base = round(h / 2 + 0.36 * px(CAL_NUM_PX))         # the digits' ink centred in the row
         cv.create_text(x, base - nf.metrics("ascent"), anchor="nw", text=num, font=nf, fill=c.fg, tags=("text",))
         x += nf.measure(num) + px(6)
-        lm, ly = mf.metrics("linespace"), yf.metrics("linespace")
-        top_ = round(h / 2 - (lm + ly - px(1)) / 2)        # the two lines centred as one block
-        cv.create_text(x, top_, anchor="nw", text=name, font=mf, fill=c.fg, tags=("text",))
-        cv.create_text(x, top_ + lm - px(1), anchor="nw", text=year, font=yf, fill=c.muted, tags=("text",))
+        cv.create_text(x, base - yf.metrics("ascent"), anchor="nw", text=year, font=yf, fill=c.muted, tags=("text",))
         today = date.today()
         away = self.month != (today.year, today.month)
         b = self.btn_today
