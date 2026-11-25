@@ -2754,11 +2754,10 @@ class App:
     def _drain_syscommands(self):
         """What the taskbar asked (winapi.hook_syscommand only appends): minimize and restore,
         animated. Two or more minimizes close together are Win+M: all at once, no animation.
-        It also runs the garbage collection Python may not run by itself (winapi.collect_garbage)."""
+        Garbage is collected by the frame clock while it is idle (anim.FrameClock._run_idle)."""
         self._sys_job = None
         if self.closed:
             return
-        winapi.collect_garbage()
         asked, self._syscommands[:] = list(self._syscommands), []
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it
