@@ -208,6 +208,66 @@ class NoteLookTest(unittest.TestCase):
         pump(self.app, timeout=0.1)
         self.assertTrue(nw.frame.winfo_ismapped())
 
+    # ---- review fixes
+    def test_unfold_all_restores_rail(self):
+        nw = self.nw
+        self.size(nw, 320, 320)
+        self.not_typing(nw)
+        self.app.fold_all(True)
+        self.settle()
+        self.app.fold_all(False)
+        self.settle()
+        self.assertEqual(nw.rail_shown(), self.nav(nw))
+        nw.toggle_collapse(instant=True)
+        self.settle()
+        nw.toggle_collapse(instant=True)
+        self.settle()
+        self.assertEqual(nw.rail_shown(), self.nav(nw))
+
+    def test_fold_from_list_page(self):
+        nw = self.nw
+        nw.body.insert("1.0", "가나다라 마바사 " * 40)
+        nw.sync_from_widgets()
+        nw.show_list()
+        pump(self.app, timeout=0.2)
+        nw.toggle_collapse(instant=True)
+        self.settle()
+        self.assertFalse(nw.btn_back.winfo_ismapped())
+        cv = nw.row
+        last = cv.find_withtag("text")[-1]
+        self.assertLessEqual(cv.bbox(last)[2], cv.winfo_width())
+        nw.toggle_collapse(instant=True)
+        self.settle()
+        self.assertTrue(nw.btn_back.winfo_ismapped())
+
+    def test_virtual_focus_keeps_rail(self):
+        nw = self.nw
+        self.typing(nw)
+        self.assertTrue(nw._editing)
+        with patched(nw, "_arrange_chrome", Spy(wraps=nw._arrange_chrome)) as spy:
+            nw.win.event_generate("<FocusIn>", detail="NotifyNonlinearVirtual")
+            nw.win.event_generate("<FocusIn>", detail="NotifyVirtual")
+            pump(self.app, timeout=0.05)
+        self.assertTrue(nw._editing)
+        self.assertEqual(len(spy.calls), 0)
+
+    def test_right_click_menu_bins_only_from_the_memo(self):
+        nw = self.nw
+        seen = []
+
+        def fake_popup(menu, x, y):
+            seen.append(menu.labels())
+
+        class Click:
+            x_root, y_root = 100, 100
+        with patched(PopupMenu, "popup", fake_popup):
+            nw._top_menu(Click())
+            nw.show_list()
+            pump(self.app, timeout=0.1)
+            nw._top_menu(Click())
+        self.assertIn(tr("menu_trash"), seen[0])
+        self.assertNotIn(tr("menu_trash"), seen[1])
+
     def test_minimize_restore_keeps_size(self):
         nw = self.nw
         h = nw.pad.height

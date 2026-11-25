@@ -1322,6 +1322,8 @@ class NoteWindow:
             self.calendar.draw()
 
     def _focus_in(self, event):
+        if event.detail in ("NotifyVirtual", "NotifyNonlinearVirtual"):
+            return                          # (on its way to the widget that gets it)
         editing = event.widget is self.body
         if editing != self._editing:
             self._editing = editing
@@ -1342,17 +1344,19 @@ class NoteWindow:
         p, px, win = self.pad, self.app.px, self.win
         if width is None:
             width = win.winfo_width() if win.winfo_width() > 1 else p.width
-        if p.collapsed:
+        if p.collapsed:                     # (no back arrow either: the strip shows the memo)
             if self.rail.winfo_manager():
                 self.rail.pack_forget()
+            self.btn_back.pack_forget()
             self._rail_state, self._rail_hidden = None, ()
             self._draw_row(width)
             return
-        if height is None:
-            busy = self.rolling or self._cover is not None
-            height = win.winfo_height() if win.winfo_height() > 1 and not busy else p.height
+        if height is None:                  # the note's own height: the window may not have caught up
+            height = p.height               # yet (just unfolded, or a glide setting out)
         if not self.rail.winfo_manager():
             self.rail.pack(side="left", fill="y", before=self.main)
+        if self.view != "home" and not self.btn_back.winfo_manager():
+            self.btn_back.pack(side="left", before=self.row)
         elsewhere = self.app.calendar_elsewhere(self) is not None      # one calendar at a time
         wanted = [b for b in self.nav_buttons if not (b is self.btn_cal and elsewhere)]
         if self._editing and self.view == "home":
@@ -2112,7 +2116,7 @@ class NoteWindow:
             (GLYPH["style"], "menu_style", lambda: self._style_menu(x, y), None),
             (GLYPH["trash"], "menu_trash", self.trash_current, None),
             (GLYPH["minimize"], "menu_minimize", self.minimize, None))
-            if b is None or b not in self.rail_shown()]
+            if (b is None or b not in self.rail_shown()) and (key != "menu_trash" or self.view == "home")]
         menu.separator()                    # what the rail does not show (its ⋯ has it too)
         for glyph, key, cmd in hidden:
             menu.add(tr(key), cmd, icon=glyph)

@@ -133,5 +133,41 @@ class CalendarLookTest(unittest.TestCase):
         self.assertAlmostEqual(float(card.top.attributes("-alpha")), CLICK_THROUGH_ALPHA, places=2)
 
 
+class EnglishHeadTest(unittest.TestCase):
+    """The head fits the mini view's width in English (long month names), at 100 % and 150 %."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.app = make_app(Path(self.tmp.name))
+        pump(self.app, lambda: len(self.app.windows) == 1)
+        pump(self.app, timeout=0.3)
+        self.app.set_language("en")
+        pump(self.app, timeout=0.3)
+
+    def tearDown(self):
+        close_app(self.app)
+        texts.set_language("ko")
+        self.tmp.cleanup()
+
+    def check(self, nw):
+        nw.toggle_calendar()
+        pump(self.app, lambda: not self.app.motion.busy(), timeout=1.5)
+        pump(self.app, timeout=0.4)
+        cal = nw.calendar
+        self.assertFalse(cal.expanded)
+        px = self.app.px
+        self.assertLessEqual(cal.head.winfo_reqwidth() + 2 * cal.edge, cal.top.winfo_width())
+        self.assertEqual(cal.btn_today.winfo_width(), px(24))
+
+    def test_head_fits_at_100(self):
+        self.check(next(iter(self.app.windows.values())))
+
+    def test_head_fits_at_150(self):
+        self.app.scale = 1.5
+        nw = self.app.new_window(next(iter(self.app.windows.values())))
+        pump(self.app, lambda: not self.app.motion.busy(), timeout=1.5)
+        self.check(nw)
+
+
 if __name__ == "__main__":
     unittest.main()
