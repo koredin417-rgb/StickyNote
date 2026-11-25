@@ -93,7 +93,6 @@ LINE_MARKS = (BULLET, TODO, DONE)   # all two characters long
 BOX_FONT = "Segoe UI Symbol"        # draws the boxes the same in any memo font
 FINISH_TYPING_TAG = "FinishTyping"  # bind tag: a click in a text field first finishes a Korean syllable
 FORMAT_BUTTON_W = 30            # format bar buttons (px at 100 %)
-GRAB_H = 6                       # the calendar's strip along its top (until its own C head)
 DATE_ROW_H = 36                  # a note's date row along its top, its edge included: the folded strip
 RAIL_W = 38                      # the rail down a note's left side, with its controls
 RAIL_BUTTON = (30, 26)           # ... its buttons (w, h)
@@ -812,6 +811,12 @@ class IconButton(tk.Canvas):
         if self.overlay:
             self.create_text(w / 2 - 1, h / 2 - 1, text=self.overlay,
                              font=(self.app.icon_font, max(5, size - 4), "bold"), fill=self._fg)
+
+    def set_ink(self, color):
+        """Draw the icon in ``color`` (a fade steps through colours: see CalendarPopup._draw_head)."""
+        if color != self._fg:
+            self._fg = self.ink_color = color
+            self._draw()
 
     def ink_box(self):
         """Where the icon's ink is, in this button's pixels: (x0, y0, x1, y1)."""
