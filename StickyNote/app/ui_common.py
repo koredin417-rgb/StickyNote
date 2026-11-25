@@ -17,6 +17,7 @@ from tkinter import colorchooser, filedialog, messagebox
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab, ImageTk
 
+import anim
 import holidays
 import texts
 import perf
@@ -339,83 +340,36 @@ def _ease_out_sine(t):
     return math.sin(t * math.pi / 2)
 
 
-FINE_TIMER_IDLE_S = 0.5          # the 1 ms timer is given back this long after the last frame
-_fine_timer = {"on": False, "last": 0.0}
-
-
-def _keep_timer_fine(widget):
-    """Frames need Windows' 1 ms timer (winapi.fine_timer); it is held only while something
-    animates and given back once nothing has for FINE_TIMER_IDLE_S."""
-    ft = _fine_timer
-    ft["last"] = time.perf_counter()
-    if ft["on"]:
-        return
-    ft["on"] = winapi.fine_timer(True)
-    if not ft["on"]:
-        return
-    root = widget._root()
-
-    def check():
-        if time.perf_counter() - ft["last"] < FINE_TIMER_IDLE_S:
-            try:
-                root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-                return
-            except tk.TclError:
-                pass
-        winapi.fine_timer(False)
-        ft["on"] = False
-    root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-
-
 def animate(widget, key, ms, step, done=None, ease=_ease_out):
     """Call ``step(k)`` once a frame for ``ms`` milliseconds, k easing (``ease``, out by
-    default) from 0 to 1, then ``done()``. Frames are paced on the clock (every FRAME_MS from
-    the start, not FRAME_MS after the last one ended), so they stay even. Starting another
-    animation with the same key on the same widget replaces the running one (it stops where
-    it is). Stops quietly when the widget is gone."""
-    jobs = widget.__dict__.setdefault("_animations", {})
-    stop_animation(widget, key)
-    start = time.perf_counter()
-    _keep_timer_fine(widget)
-
-    def frame():
-        jobs.pop(key, None)
-        now = time.perf_counter()
-        if perf.ENABLED:
-            perf.perf.frame(key, now)
-        elapsed = (now - start) * 1000
-        t = 1.0 if ms <= 0 else min(1.0, elapsed / ms)
-        try:
-            step(ease(t))
-            if t < 1.0:
-                _keep_timer_fine(widget)
-                spent = (time.perf_counter() - start) * 1000
-                due = (math.floor(spent / FRAME_MS) + 1) * FRAME_MS      # the next frame on the grid
-                jobs[key] = widget.after(max(1, round(due - spent)), frame)
-                return
-        except tk.TclError:
-            return
-        if done is not None:
-            done()
-    frame()
+    default) from 0 to 1, then ``done()``: on the app's one frame clock (anim.FrameClock),
+    paced to the display. The same key on the same widget replaces the running one. Stops
+    quietly when the widget is gone."""
+    anim.clock_of(widget).animate(widget, key, ms, step, done, ease)
 
 
 def stop_animation(widget, key):
-    job = widget.__dict__.get("_animations", {}).pop(key, None)
-    if job is not None:
-        try:
-            widget.after_cancel(job)
-        except tk.TclError:
-            pass
+    try:
+        anim.clock_of(widget).stop(widget, key)
+    except tk.TclError:
+        pass
 
 
 def animating(widget, key) -> bool:
-    return key in widget.__dict__.get("_animations", {})
+    try:
+        return anim.clock_of(widget).active(widget, key)
+    except tk.TclError:
+        return False
 
 
 def fade(win, key, start, end, ms, done=None):
-    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them)."""
-    animate(win, key, ms, lambda k: win.attributes("-alpha", start + (end - start) * k), done)
+    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them). Every
+    fade of a window is one "alpha" tween (``key`` is kept for the callers but not used): a fade
+    started while another runs turns from where that one is, never jumping to ``start``."""
+    clock = anim.clock_of(win)
+    clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
+                write=lambda v: win.attributes("-alpha", v),
+                frm=None if clock.active(win, "alpha") else start, done=done)
 
 
 def _alpha(win) -> float:

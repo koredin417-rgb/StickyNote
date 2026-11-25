@@ -23,8 +23,7 @@ import tkinter as tk
 import perf
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import (FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, _keep_timer_fine, accent_color, animating,
-                       stop_animation)
+from ui_common import FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, accent_color, animating, stop_animation
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
@@ -251,7 +250,6 @@ class Motion:
         if self._job is None:
             self._clock0 = time.perf_counter()
             self._job = app.root.after(FRAME_MS, self._tick)
-        _keep_timer_fine(app.root)              # frames need Windows' 1 ms timer (else 16 or 31 ms apart)
         for item in new:                        # last: drawing may run idle tasks (and a plan in them)
             if item.id == CAL and item.sized and self._items.get(CAL) is item:
                 self._resize_calendar(item)
@@ -352,7 +350,6 @@ class Motion:
         if self._items:
             if self._job is None:
                 self._job = self.app.root.after(next_delay(self._clock0, time.perf_counter()), self._tick)
-                _keep_timer_fine(self.app.root)
         else:
             self._clock0 = None
             self._end()

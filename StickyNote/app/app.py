@@ -47,6 +47,7 @@ import grid
 import holidays
 import space
 import texts
+import anim
 import gc
 import perf
 import winapi
@@ -98,6 +99,7 @@ class App:
         self._screens = None                        # the real monitors, read once (screens())
         self.store = NoteStore(folder)
         self.root = root or tk.Tk()
+        self.clock = anim.install(self.root)        # the one frame clock every animation runs on
         self.root.withdraw()
         self.root.title(APP_NAME)
         self.root.report_callback_exception = self._report_error
@@ -2564,6 +2566,7 @@ class App:
             nw.cancel_jobs()
             if nw.calendar and nw.calendar._click_job:
                 nw.calendar.grid.after_cancel(nw.calendar._click_job)
+        self.clock.close()
         self.root.destroy()
 
     # ---- clock, second launch, errors ---------------------------------------------------
