@@ -132,6 +132,7 @@ TYPING_SYNC_MS = 250            # the stored memo catches up with the typing aft
 class NoteWindow:
     def __init__(self, app: App, pad: Pad, note: Note, fade_in=False):
         self.app, self.pad, self.note = app, pad, note
+        self.look_version = 0               # bumped whenever what it shows changes (its kept picture: shots)
         if perf.ENABLED:
             perf.perf.track_window(self)
         self._closing = False
@@ -409,6 +410,7 @@ class NoteWindow:
             page = {"list": self.list_view, "settings": self.settings_view, "bin": self.bin_view}[view]
             page.frame.pack(fill="both", expand=True)
         self._arrange_chrome()              # (the format buttons are the memo's)
+        self.bump_look()
         tk.Misc.tkraise(self.grip)
         self._place_toast()
 
@@ -510,6 +512,7 @@ class NoteWindow:
             self.viewer.index = self.pad.tab = index
             self._fill_body(*self.note.tab_text(index))
             self.app.request_save()
+            self.bump_look()
         self.viewer.render(follow=True)
 
     def step_tab(self, delta):
@@ -810,6 +813,7 @@ class NoteWindow:
     def _place_toast(self):
         if self._undo_note is None and not self._notice:
             return
+        self.bump_look()
         px = self.app.px
         if self.view == "list":
             lift = self.list_view.bin_row.winfo_reqheight() + px(10)
@@ -832,6 +836,7 @@ class NoteWindow:
         self._undo_note, self._notice, self._undo_action = None, False, None
         stop_animation(self.toast, "rise")
         self.toast.place_forget()
+        self.bump_look()
 
     def undo_trash(self):
         note = self._undo_note
@@ -995,6 +1000,13 @@ class NoteWindow:
                         write=lambda v, w=w: w.winfo_exists() and w.attributes("-alpha", v),
                         ease=anim.ease_in, frm=a, done=done if w is self.win else None)
 
+    def bump_look(self):
+        """What the note shows changed: its kept picture is no longer current (shots)."""
+        self.look_version += 1
+        shots = getattr(self.app, "shots", None)
+        if shots is not None:
+            shots.stale(self)
+
     def _pack_frame(self):
         self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
         if hasattr(self, "bar"):
@@ -1026,22 +1038,12 @@ class NoteWindow:
         self.win.geometry(f"{p.width}x{round(h)}+{p.x}+{p.y + round(dy)}")
 
     def _shot(self):
-        """A picture of the whole note as it shows now (PrintWindow), or None."""
-        try:
-            shot = winapi.snapshot(self.win) if self.win.winfo_ismapped() else None
-        except tk.TclError:
-            return None
-        if shot is None:
-            return None
-        w, h, data = shot
-        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).copy()
-        self._roll_shot = ((self.pad.width, h, self.note.color), img)      # kept: the way back rolls it too
-        return img
+        """A picture of the whole note as it shows now (the kept one while current: shots), or None."""
+        return self.app.shots.shot(self)
 
     def _kept_shot(self, height):
-        """The picture kept from the last roll, if the note still looks that way (same size and color)."""
-        kept = getattr(self, "_roll_shot", None)
-        return kept[1] if kept and kept[0] == (self.pad.width, height, self.note.color) else None
+        """Its kept picture at its own width and ``height`` (the last roll's), if still current."""
+        return self.app.shots.peek(self, (self.pad.width, height))
 
     def _roll_cover(self, img):
         """While it rolls (ROLL_MS), a picture of the whole note stands in, anchored at the top: the
@@ -1216,7 +1218,7 @@ class NoteWindow:
         self._trace_ids = []
         self.list_view.release()
         self.viewer.release()
-        self._roll_shot = None
+        self.app.shots.drop(self)
         self._inline = {}
         if self.app.last_note is self:
             self.app.last_note = None
@@ -1318,6 +1320,7 @@ class NoteWindow:
 
     def update_date(self):
         self._draw_row()
+        self.bump_look()
         if self.calendar:
             self.calendar.draw()
 
@@ -1375,6 +1378,9 @@ class NoteWindow:
                 show.remove(b)
         shown = tuple(show)
         self._rail_hidden = tuple(b for b in wanted if b not in shown)
+        if shown != getattr(self, "_rail_seen", None):     # (folding and back: the same look)
+            self._rail_seen = shown
+            self.bump_look()
         if shown != self._rail_state:
             self._rail_state = shown
             for b in self.nav_buttons + self.format_buttons:
@@ -1518,6 +1524,7 @@ class NoteWindow:
             self.calendar.recolor(self.app.theme_colors())
             self.calendar.apply_alpha()
             self.calendar.top.attributes("-topmost", p.pinned)
+        self.bump_look()
 
     def _draw_grip(self):
         g, c = self.grip, self.colors
@@ -1595,6 +1602,7 @@ class NoteWindow:
             self.viewer.frame.pack(side="top", fill="x", padx=px(8), pady=(px(2), px(4)))
             self.viewer.render(follow=True)
         tk.Misc.tkraise(self.grip)
+        self.bump_look()
 
     def _style_menu(self, x=None, y=None):
         menu = PopupMenu(self.app, self.win, self.colors)
@@ -1712,6 +1720,7 @@ class NoteWindow:
         self._sync_soon()
 
     def _sync_soon(self):
+        self.bump_look()                    # (typed: what it shows changed)
         """While typing, the stored memo catches up once the typing pauses: reading a long
         memo back (some 5 ms for 3000 lines) twice at every key made typing heavy. Whatever
         needs it at once (saving, switching memos, the list, closing) calls sync_from_widgets."""
@@ -2037,6 +2046,7 @@ class NoteWindow:
         mark = self._line_mark(self.body.index("insert").split(".")[0])
         self.btn_bullets.set_active(mark == BULLET)
         self.btn_todo.set_active(mark in (TODO, DONE))
+        self.bump_look()
 
     def _read_marks(self, length):
         """The formats in the text, as [kind, start, end] character offsets."""
@@ -2180,6 +2190,7 @@ class NoteWindow:
         animate(box, "drop", HINT_DROP_MS,         # drops HINT_DROP px into place
                 lambda k: box.place(relx=0.5, y=y - round(drop * (1 - k)), anchor="n", width=width))
         tk.Misc.tkraise(box)
+        self.bump_look()
 
     def hide_hints(self):
         box = getattr(self, "hints", None)
@@ -2187,6 +2198,7 @@ class NoteWindow:
             stop_animation(box, "drop")
             box.destroy()
             self.hints = None
+            self.bump_look()
 
     def close_hints(self):
         self.hide_hints()
@@ -2554,12 +2566,12 @@ class NoteWindow:
         in the corner. thaw() brings the widgets back (the text wraps to the new size then)."""
         if self._cover is not None or not self.win.winfo_ismapped():
             return
-        shot = winapi.snapshot(self.win)
+        shot = self.app.shots.shot(self)        # (taken ahead for linked notes: no wait at the first frame)
         if shot is None:
             return
-        w, h, data = shot
+        w, h = shot.size
         e = self.edge
-        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).crop((e, e, w - e, h - e))
+        img = shot.crop((e, e, w - e, h - e))
         fw, fh = img.size
         fx, fy = self.frame.winfo_rootx(), self.frame.winfo_rooty()
 

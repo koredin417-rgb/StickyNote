@@ -128,6 +128,7 @@ class ImageViewer:
 
     def render(self, follow=False):
         """Redraw for the memo's pictures and the window's current size."""
+        self.nw.bump_look()
         names = self.nw.note.images
         if not names:
             self.reset()
