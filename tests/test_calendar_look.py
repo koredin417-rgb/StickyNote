@@ -98,6 +98,40 @@ class CalendarLookTest(unittest.TestCase):
         self.settle(0.6)
         self.assertEqual(len(self._sizes_while_paging()), 1)
 
+    # ---- Task 8: §6.4 items
+    def test_chip_drop_never_twice(self):
+        cal, nw = self.cal, self.nw
+        nw.body.insert("1.0", "옮길 메모")
+        nw.sync_from_widgets()
+        cal.click_view("big")
+        self.settle(0.6)
+        cal.draw()
+        note, today = nw.note, date.today()
+        x0, y0, x1, y1, _d = next(cell for cell in cal._cells if cell[4] != today and cell[4].month == today.month)
+
+        class Drop:
+            x, y = (x0 + x1) // 2, (y0 + y1) // 2
+        cal._chip_drag = {"note": note, "day": today}
+        cal._drop_chip(Drop())
+        g, tag = cal.grid, f"chip{note.id}"
+        self.assertTrue(g.find_withtag("settle"))
+        self.assertTrue(g.find_withtag(tag))
+        self.assertTrue(all(g.itemcget(i, "state") == "hidden" for i in g.find_withtag(tag)))
+        pump(self.app, timeout=anim.FAST / 1000 + 0.5)
+        self.assertFalse(g.find_withtag("settle"))
+        self.assertTrue(g.find_withtag(tag))
+        self.assertTrue(all(g.itemcget(i, "state") in ("", "normal") for i in g.find_withtag(tag)))
+
+    def test_holiday_card_fades_in(self):
+        import holidays
+        from motion import CLICK_THROUGH_ALPHA
+        day = sorted(holidays.in_year(date.today().year))[0]
+        card = self.cal.holiday_card
+        card.show(day.isoformat())
+        self.assertLess(float(card.top.attributes("-alpha")), CLICK_THROUGH_ALPHA - 0.05)
+        pump(self.app, timeout=anim.FAST / 1000 + 0.4)
+        self.assertAlmostEqual(float(card.top.attributes("-alpha")), CLICK_THROUGH_ALPHA, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

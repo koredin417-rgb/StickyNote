@@ -102,12 +102,17 @@ class HolidayCard:
         x = min(max(x, left), max(left, right - w))
         y = min(max(y, top_), max(top_, bottom - h))
         top.geometry(f"+{x}+{y}")
+        appearing = not top.winfo_viewable()
+        if appearing:
+            top.attributes("-alpha", 0.0)
         top.deiconify()
         top.update_idletasks()
         if not self._through:                   # after its first map (it has a frame window then)
             winapi.set_click_through(top, True)
             self._through = bool(winapi.hwnd_of(top))
         top.lift()
+        if appearing:                           # fades in like the other pop-ups (anim.FAST)
+            fade(top, "alpha", 0.0, CLICK_THROUGH_ALPHA, anim.FAST)
 
     def hide(self):
         if self.top is not None:
@@ -1466,6 +1471,9 @@ class CalendarPopup:
             return
         old = note.date
         new = (date.fromisoformat(note.date) + timedelta(days=shift)).isoformat()
+        stop_animation(g, "settle")
+        self._end_settle()                      # (an earlier drop still settling: it lands now)
+        self._settling = note.id                # drawn hidden in its new day until the copy lands there
         self.app.move_note_date(note, new)      # redraws: the title is in its new day
         self._note().show_undo_action(tr("moved_day", day=_date_label(new)),
                                  lambda: self.app.move_note_date(note, old))
@@ -1488,7 +1496,7 @@ class CalendarPopup:
             bw, bh = w + (spot[2] - w) * k, h + (spot[3] - h) * k
             g.coords(box, x, y, x + bw, y + bh)
             g.coords(text, x + px(4), y + bh / 2)
-        animate(g, "settle", CHIP_SETTLE_MS, step, lambda: g.delete("settle"))
+        animate(g, "settle", CHIP_SETTLE_MS, step, self._end_settle)
 
     def _click(self, event):
         if self._chip_drag and self._chip_drag["moving"]:
@@ -1969,10 +1977,11 @@ class CalendarPopup:
                     nc = Colors.of(self.top, note.color)
                     box = (x0 + px(4), top, x0 + cw - px(4), top + chip_h)     # its left edge under the slot's
                     on = note is self._picked           # clicked (Delete bins it): a shade deeper, bold
+                    tags, state = ("chip", f"chip{note.id}"), self._chip_state(note)
                     g.create_rectangle(*box, fill=shade(self.top, nc.bg, 1) if on else nc.bg,
-                                       outline=shade(self.top, note.color, 3 if on else 2), tags=("chip",))
+                                       outline=shade(self.top, note.color, 3 if on else 2), tags=tags, state=state)
                     g.create_text(box[0] + px(4), top + chip_h / 2, anchor="w", fill=nc.fg,
-                                  font=bold_font if on else font, tags=("chip",),
+                                  font=bold_font if on else font, tags=tags, state=state,
                                   text=self._fit(memo_title(note), cw - px(14), measure))
                     self._chips.append((*box, note))
                     top += chip_h + gap
@@ -1985,13 +1994,26 @@ class CalendarPopup:
                 xb = (c1 + 1) * cw - (px(4) if ends else 0)
                 nc = Colors.of(self.top, note.color)
                 on = note is self._picked               # clicked (Delete bins it): a shade deeper, bold
+                tags, state = ("chip", "period", f"chip{note.id}"), self._chip_state(note)
                 g.create_rectangle(xa, yb, xb, yb + band_h, fill=shade(self.top, nc.bg, 1) if on else nc.bg,
-                                   outline=shade(self.top, note.color, 3 if on else 2), tags=("chip", "period"))
+                                   outline=shade(self.top, note.color, 3 if on else 2), tags=tags, state=state)
                 g.create_text(xa + px(4), yb + band_h / 2, anchor="w", fill=nc.fg,
-                              font=band_bold if on else band_font, tags=("chip", "period"),
+                              font=band_bold if on else band_font, tags=tags, state=state,
                               text=self._fit(memo_title(note), xb - xa - px(8), band_measure))
                 self._chips.append((xa, yb, xb, yb + band_h, note))
         g.configure(height=hh + ch * len(weeks))
+
+    def _chip_state(self, note):
+        """A dropped memo's title is hidden in its new day while its flying copy settles there."""
+        return "hidden" if note.id == getattr(self, "_settling", None) else "normal"
+
+    def _end_settle(self):
+        """The flying copy has landed (or another drop takes over): the title shows in its day."""
+        nid, self._settling = getattr(self, "_settling", None), None
+        g = self.grid
+        g.delete("settle")
+        if nid is not None:
+            g.itemconfigure(f"chip{nid}", state="normal")
 
     @staticmethod
     def _fit(text, width, measure):
