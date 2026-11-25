@@ -1302,7 +1302,7 @@ class ScrollArea:
     def fine_steps(self, notch):
         """Scroll to the pixel (the view can be put anywhere), ``notch`` px a wheel notch."""
         self.canvas.configure(yscrollincrement=1)
-        self.step = notch
+        self.step = self.scroll.units = notch       # (the wheel over the thumb as over the list)
 
     def listen(self, fn):
         """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
@@ -1380,6 +1380,12 @@ proc ::sticky::text_proxy {w callback args} {
             $callback inserted $at [$orig index "$at + [string length $chars] chars"]
             return $result
         }
+        delete {
+            set at [$orig index [lindex $args 1]]
+            set result [$orig {*}$args]
+            $callback deleted $at
+            return $result
+        }
         mark {
             set result [$orig {*}$args]
             if {[lindex $args 1] eq "set" && [lindex $args 2] eq "insert"} {$callback moved}
@@ -1418,8 +1424,8 @@ def _fill_rich_text(text: tk.Text, body, marks, inline, embed):
 
 
 def _watch_text(text: tk.Text, callback):
-    """Call ``callback("inserted", start, end)`` after every insert and
-    ``callback("moved")`` after every cursor move in ``text``."""
+    """Call ``callback("inserted", start, end)`` after every insert, ``callback("deleted", at)``
+    after every delete and ``callback("moved")`` after every cursor move in ``text``."""
     t = text.tk
     if not t.call("info", "commands", "::sticky::text_proxy"):
         t.eval(_TEXT_PROXY)

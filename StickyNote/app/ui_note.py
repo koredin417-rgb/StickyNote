@@ -1767,6 +1767,10 @@ class NoteWindow:
     def _text_event(self, what, *args):
         if what == "inserted":
             self._typed(*args)
+        elif what == "deleted":             # the line it joined at is re-tagged (_on_body_modified)
+            row = int(str(args[0]).split(".")[0])
+            t = getattr(self, "_touched", None)
+            self._touched = (min(row, t[0]), max(row, t[1])) if t else (row, row)
         elif what == "moved" and not self._raw:
             self._pending = None
             self._update_format_buttons()

@@ -55,7 +55,6 @@ class ListView:
         px = self.app.px
         self.day: str | None = None
         self._order: list[str] = []
-        self._shown: list = []          # pictures on the cards now (cached in App.picture)
         self.frame = tk.Frame(nw.views, bd=0)
 
         self.search_box = tk.Frame(self.frame, bd=0)
@@ -184,7 +183,6 @@ class ListView:
         for child in self.area.inner.winfo_children():
             child.destroy()
         self._trash = []                    # (destroyed with the rest)
-        self._shown = []
         self.bin_icons, self.cards, self.pin_icons = {}, {}, {}
         self.sections, self.sort_switch = {}, None
         self._picked, self._painters = None, {}
@@ -732,14 +730,13 @@ class ListView:
                 tk.Label(row, text=f"+{len(note.images) - i}", bg=c.bg, fg=c.muted,
                          font=(UI_BOLD, 9, "bold")).pack(side="left", padx=px(2))
                 break
-            tk.Label(row, image=thumb, bg=c.bg, bd=0).pack(side="left", padx=(0, px(4)))
+            pic = tk.Label(row, image=thumb, bg=c.bg, bd=0)
+            pic.image = thumb               # (held by its label: let go of with the card)
+            pic.pack(side="left", padx=(0, px(4)))
             used += thumb.width() + px(4)
 
     def _thumb(self, name, box):
-        photo = self.app.picture(name, box)
-        if photo is not None:
-            self._shown.append(photo)       # keep it while a card shows it
-        return photo
+        return self.app.picture(name, box)
 
     def _card_menu(self, event, note):
         self.hide_preview()
