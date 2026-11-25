@@ -176,6 +176,21 @@ class QuietGestureTest(InteractTest):
         a._drag_end(ev(x - 60, y + 30, ALT))
         self.settle()
 
+    def test_group_freezes_at_press(self):
+        a, b, c = self.group_of_three()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        a._resize_start(ev(x, y))
+        a0, b0, a1, b1 = a._resize_box
+        for o in (b, c):
+            l, t, r, bt = o.pad.x, o.pad.y, o.pad.x + o.pad.width, o.pad.y + o.pad.height
+            in_line = min(r, a1) - max(l, a0) > 0 or min(bt, b1) - max(t, b0) > 0
+            self.assertEqual(o._cover is not None, in_line, o.pad.id)
+        a._drag_end(ev(x, y))
+        self.settle()
+        for o in (a, b, c):
+            self.assertIsNone(o._cover)
+
     def test_ring_window_keeps_its_size_while_growing(self):
         ring = self.app.ring
         px = self.app.px

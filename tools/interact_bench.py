@@ -46,7 +46,7 @@ class Bench:
 
     def settle(self):
         self.pump(5.0, until=lambda: not self.app.motion.busy())
-        self.pump(0.4)
+        self.pump(3.0)                      # quiet a moment, as between two gestures (shots warm up)
 
     def open_20(self):
         last = next(iter(self.app.windows.values()))

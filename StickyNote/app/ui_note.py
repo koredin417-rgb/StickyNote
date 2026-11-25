@@ -2339,6 +2339,10 @@ class NoteWindow:
         if self._resize_group:              # the same line as when they move together
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)
+            a0, b0, a1, b1 = self._resize_box
+            for o, (l, t, r, b) in self._resize_group:  # those in its row or column will change size: their
+                if min(r, a1) - max(l, a0) > 0 or min(b, b1) - max(t, b0) > 0:     # pictures go in now, at
+                    o.freeze()              # the press, where nothing moves yet (not at the first frame)
 
     def _resize_move(self, event):
         """The pointer moved: noted, and applied once at the next display frame (_apply_resize)."""
