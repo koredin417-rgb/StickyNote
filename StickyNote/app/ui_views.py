@@ -19,6 +19,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab,
 
 import holidays
 import texts
+import perf
 import winapi
 from icon import draw_icon
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
@@ -120,6 +121,7 @@ class ListView:
         self.refresh()
 
     # -- drawing
+    @perf.timed("list_refresh")
     def refresh(self):
         c = self.nw.colors
         px = self.app.px

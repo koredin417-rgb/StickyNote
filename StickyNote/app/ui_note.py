@@ -20,6 +20,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab,
 import geom
 import holidays
 import texts
+import perf
 import winapi
 from icon import draw_icon
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
@@ -131,6 +132,8 @@ TYPING_SYNC_MS = 250            # the stored memo catches up with the typing aft
 class NoteWindow:
     def __init__(self, app: App, pad: Pad, note: Note, fade_in=False):
         self.app, self.pad, self.note = app, pad, note
+        if perf.ENABLED:
+            perf.perf.track_window(self)
         self._closing = False
         self.sticker: MiniSticker | None = None     # shown on the desktop while minimized
         self.minimized = False              # hidden, standing in as its sticker (minimize / restore)
@@ -1604,6 +1607,7 @@ class NoteWindow:
         return "break"
 
     # ---- edits ----------------------------------------------------------------------------------
+    @perf.timed("body_modified")
     def _on_body_modified(self, _event=None):
         if not self.body.edit_modified():
             return
@@ -2149,6 +2153,7 @@ class NoteWindow:
         self._snap_id = sid
         return nx, ny
 
+    @perf.timed("drag_move")
     def _drag_move(self, event):
         if self._drag:
             dx, dy = self._drag
@@ -2204,6 +2209,7 @@ class NoteWindow:
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)
 
+    @perf.timed("resize_move")
     def _resize_move(self, event):
         if self._resize:
             x0, y0, w0, h0 = self._resize

@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 import tkinter as tk
 
+import perf
 import winapi
 from geom import CAL, pad_box, shown_h
 from ui_common import FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, accent_color, animating, stop_animation
@@ -322,6 +323,8 @@ class Motion:
         """One frame for every item, on the one clock; those that got there land."""
         self._job = None
         now, landed = time.perf_counter(), []
+        if perf.ENABLED:
+            perf.perf.frame("motion", now)
         for item in list(self._items.values()):
             t = 1.0 if item.ms <= 0 else min(1.0, (now - item.t0) * 1000 / item.ms)
             if not self._show(item, _ease_out(t)):

@@ -47,6 +47,7 @@ import grid
 import holidays
 import space
 import texts
+import perf
 import winapi
 from geom import Box, Screen
 from icon import draw_icon
@@ -2511,6 +2512,7 @@ class App:
                 if w.calendar:
                     w.calendar.draw()
 
+    @perf.timed("save")
     def save_now(self):
         for nw in self.windows.values():
             if not nw.win.winfo_exists():

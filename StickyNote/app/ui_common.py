@@ -19,6 +19,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab,
 
 import holidays
 import texts
+import perf
 import winapi
 from geom import CAL, PILE_RESET, PILE_STEP, TILE_SHRINK_STEP    # noqa: F401  (shared with the Tk-free modules)
 from geom import overlap as _overlap, pad_box as _pad_box, shown_h as _shown_h, touching as _touching  # noqa: F401
@@ -361,6 +362,8 @@ def animate(widget, key, ms, step, done=None, ease=_ease_out):
     def frame():
         jobs.pop(key, None)
         now = time.perf_counter()
+        if perf.ENABLED:
+            perf.perf.frame(key, now)
         elapsed = (now - start) * 1000
         t = 1.0 if ms <= 0 else min(1.0, elapsed / ms)
         try:

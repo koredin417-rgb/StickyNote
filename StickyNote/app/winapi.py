@@ -651,3 +651,42 @@ def hook_syscommand(win, sink: list) -> None:
     if comctl32.SetWindowSubclass(hwnd, proc, 2, 0):
         _syscmd_hooks[hwnd] = proc          # keep the callback alive while the window lives
         _keep_gc_out_of_procs()
+
+
+# ---- measurements (perf.py) ---------------------------------------------------------------
+if IS_WINDOWS:
+    class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+                    ("PrivateUsage", ctypes.c_size_t)]
+
+    _k32 = ctypes.WinDLL("kernel32")                # own prototypes, apart from the shared handle
+    _k32.GetCurrentProcess.restype = wintypes.HANDLE
+    _k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(_PROCESS_MEMORY_COUNTERS_EX),
+                                             wintypes.DWORD)
+    _k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+    _u32 = ctypes.WinDLL("user32")
+    _u32.GetGuiResources.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    _u32.GetGuiResources.restype = wintypes.DWORD
+
+
+def process_memory() -> int:
+    """This process's private bytes (what it alone holds in memory), or 0 off Windows."""
+    if not IS_WINDOWS:
+        return 0
+    c = _PROCESS_MEMORY_COUNTERS_EX()
+    c.cb = ctypes.sizeof(c)
+    if not _k32.K32GetProcessMemoryInfo(_k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+        return 0
+    return int(c.PrivateUsage)
+
+
+def gui_handles() -> tuple[int, int]:
+    """(GDI objects, USER objects) this process holds now, or (0, 0) off Windows."""
+    if not IS_WINDOWS:
+        return 0, 0
+    me = _k32.GetCurrentProcess()
+    return int(_u32.GetGuiResources(me, 0)), int(_u32.GetGuiResources(me, 1))
