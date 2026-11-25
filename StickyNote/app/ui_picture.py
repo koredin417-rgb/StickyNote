@@ -83,6 +83,11 @@ class ImageViewer:
     def has_picture(self):
         return self._source is not None and self._source[1] is not None
 
+    def release(self):
+        """The window is closing: drop the pictures (the full-size source above all)."""
+        self._photo = self._source = self._base = self._shown = None
+        self._thumbs.clear()
+
     def reset(self):
         """Forget the shown picture (another memo is being loaded)."""
         stop_animation(self.canvas, "fade")

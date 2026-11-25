@@ -53,7 +53,8 @@ class ListView:
                                      relief="flat", highlightthickness=0, font=(UI_FONT, 10))
         self.search_entry.pack(side="left", fill="x", expand=True, ipady=px(4), padx=(0, px(6)))
         # typing a search: the list is made again once the typing pauses, not at every letter
-        self.search.trace_add("write", lambda *a: self.nw._later("search", SEARCH_DELAY_MS, self.refresh))
+        self._search_trace = self.search.trace_add(
+            "write", lambda *a: self.nw._later("search", SEARCH_DELAY_MS, self.refresh))
         # keyboard: ↑↓ pick a memo card, Enter opens it (the first one if none is picked)
         self.search_entry.bind("<Down>", lambda e: (self.step_pick(1), "break")[1])
         self.search_entry.bind("<Up>", lambda e: (self.step_pick(-1), "break")[1])
@@ -121,6 +122,15 @@ class ListView:
         self.refresh()
 
     # -- drawing
+    def release(self):
+        """The window is closing: the search trace (held by Tcl) would keep it alive."""
+        name, self._search_trace = self._search_trace, None
+        if name is not None:
+            try:
+                self.search.trace_remove("write", name)
+            except tk.TclError:
+                pass
+
     @perf.timed("list_refresh")
     def refresh(self):
         c = self.nw.colors

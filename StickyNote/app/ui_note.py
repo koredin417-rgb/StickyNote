@@ -302,7 +302,8 @@ class NoteWindow:
         self.grip.bind("<ButtonRelease-1>", self._drag_end)
 
         # ---- events
-        self.header_var.trace_add("write", lambda *a: self.sync_from_widgets())
+        self._trace_ids = [(self.header_var,       # removed in destroy(): a trace keeps this window alive
+                            self.header_var.trace_add("write", lambda *a: self.sync_from_widgets()))]
         self.header_entry.bind("<Return>", lambda e: (self.body.focus_set(), "break")[1])
         self.body.bind("<<Modified>>", self._on_body_modified)
         self.body.bind("<<Selection>>", lambda e: self._update_format_buttons())
@@ -1182,8 +1183,26 @@ class NoteWindow:
         self.cancel_jobs()
         stop_animation(self.win, "fade")
         stop_animation(self.win, "roll")
+        stop_animation(self.win, "flash")
+        self._release()
         if self.win.winfo_exists():
             self.win.destroy()
+
+    def _release(self):
+        """Let go of what would keep this window (and its pictures) alive once it is closed:
+        variable traces live in Tcl and hold their callbacks, and through them this window."""
+        for var, name in self._trace_ids:
+            try:
+                var.trace_remove("write", name)
+            except tk.TclError:
+                pass
+        self._trace_ids = []
+        self.list_view.release()
+        self.viewer.release()
+        self._roll_shot = None
+        self._inline = {}
+        if self.app.last_note is self:
+            self.app.last_note = None
 
     def cancel_jobs(self):
         for job in self._jobs.values():
