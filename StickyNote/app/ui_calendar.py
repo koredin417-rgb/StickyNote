@@ -1273,10 +1273,55 @@ class CalendarPopup:
         return {iso for iso in self._memos_by_day() if iso.startswith(prefix)}
 
     def pick_day(self, iso):
-        self.selected = iso
+        old, self.selected = self.selected, iso
         self._note().show_list(day=iso)
-        self.draw()
+        if self._drawn_now():
+            self._show_selected(old, iso)       # only the two days change, not the month
+        else:
+            self.draw()
         self.show_details(iso)
+
+    def _drawn_now(self) -> bool:
+        """The grid shows the month it was last drawn for (not paging): a part of it can change alone."""
+        return getattr(self, "_drawn", None) == self.month and not getattr(self, "_paging", False)
+
+    def _show_selected(self, old, new):
+        """The picked day ``new`` (and ``old``, no longer picked) repainted as a full draw would."""
+        g = self.grid
+        if self.expanded:
+            for iso in (old, new):
+                if iso and g.find_withtag(f"cell{iso}"):
+                    d = date.fromisoformat(iso)
+                    g.itemconfigure(f"cell{iso}", fill=self._big_fill(d, d == self._hover))
+            return
+        g.delete("selected")
+        spot = self._spots.get(new) if new else None
+        if spot is not None:
+            cx, cy, tw, th = spot
+            g.create_image(cx, cy, image=self._tile(self.colors.select, tw, th), tags=("selected",))
+            g.tag_lower("selected")
+        hover, self._hover = self._hover, None      # (its tile is not drawn under the picked day)
+        self._set_hover(hover)
+
+    def _show_picked(self, old, new):
+        """The memo titles of ``old`` and ``new`` repainted for who is picked now (big view)."""
+        g, fonts = self.grid, getattr(self, "_chip_fonts", None)
+        if not self.expanded or fonts is None:
+            return
+        font, bold, band_font, band_bold = fonts
+        for note in (old, new):
+            if note is None:
+                continue
+            on = note is self._picked
+            nc = Colors.of(self.top, note.color)
+            for i in g.find_withtag(f"chip{note.id}"):
+                if g.type(i) == "rectangle":
+                    g.itemconfigure(i, fill=shade(self.top, nc.bg, 1) if on else nc.bg,
+                                    outline=shade(self.top, note.color, 3 if on else 2))
+                elif "period" in g.gettags(i):
+                    g.itemconfigure(i, font=band_bold if on else band_font)
+                else:
+                    g.itemconfigure(i, font=bold if on else font)
 
     def show_details(self, iso):
         """A card under the picked day: what its holiday is (nothing for an ordinary day). It
@@ -1514,10 +1559,15 @@ class CalendarPopup:
             return
         note = self._chip_at(event.x, event.y)
         if note is not None:            # a memo title in the big view: open it in the note, and keep
-            self.selected = note.date   # the keys here (outlined: Delete bins it, not the memo's text)
+            old_day, old_pick = self.selected, self._picked     # the keys here (outlined: Delete bins it,
+            self.selected = note.date                           # not the memo's text)
             self._picked = note
             self._note().open_note(note)
-            self.draw()
+            if self._drawn_now():                   # (another memo opened: refresh_lists drew it all)
+                self._show_selected(old_day, note.date)
+                self._show_picked(old_pick, note)
+            else:
+                self.draw()
             self.top.after_idle(self.top.focus_force)
             return
         self._picked = None
@@ -1581,8 +1631,11 @@ class CalendarPopup:
     def unpick(self):
         """The memo title clicked last is not "picked" any more (the note's text was clicked or typed in)."""
         if self._picked is not None:
-            self._picked = None
-            self.draw()
+            old, self._picked = self._picked, None
+            if self._drawn_now():
+                self._show_picked(old, None)
+            else:
+                self.draw()
 
     def _delete_key(self, _event=None):
         """Delete: the memo title clicked last (big view), else the memo in the preview, to the bin."""
@@ -1746,6 +1799,7 @@ class CalendarPopup:
         """Draw the month. ``keep``: a tag whose items stay (a page sliding out: _page_to)."""
         c, g, px = self.colors, self.grid, self.app.px
         y, m = self.month
+        self._drawn = self.month
         self._draw_head()
         g.delete(f"!{keep}" if keep else "all")
         if self.fit_size:                   # filling a given size: the cells for six weeks (C2)
@@ -1943,6 +1997,7 @@ class CalendarPopup:
         chip_h, gap, band_h = px(MEMO_CHIP_H), px(2), px(PERIOD_BAND_H)
         period_rows = self._period_rows(weeks)
         bold_font, band_bold = (UI_BOLD, 9, "bold"), (UI_BOLD, 8, "bold")
+        self._chip_fonts = (font, bold_font, band_font, band_bold)      # (_show_picked)
         sw, sh, head = self._big_slot()
         for row, week in enumerate(weeks):
             segs = period_rows[row]
