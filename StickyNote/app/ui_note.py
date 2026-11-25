@@ -35,7 +35,7 @@ animate_ = animate                 # (minimize / restore take an ``animate`` arg
 STICKER_H = 34                  # a minimized note's sticker on the desktop (px at 100 %)
 STICKER_W = (96, 180)           # ... its width fits the title, within these (px at 100 %)
 STICKER_DRAG = 4                # ... a press that moves this far is a drag, not a click (px at 100 %)
-STICKER_FADE_MS = 140
+STICKER_FADE_MS = anim.FAST 
 
 
 class MiniSticker:

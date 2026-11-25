@@ -94,38 +94,38 @@ BOX_FONT = "Segoe UI Symbol"        # draws the boxes the same in any memo font
 FINISH_TYPING_TAG = "FinishTyping"  # bind tag: a click in a text field first finishes a Korean syllable
 FORMAT_BUTTON_W = 30            # format bar buttons (px at 100 %)
 GRAB_H = 6                       # the strip along the top for moving the note
-GLIDE_MS = 220                   # a note sliding back onto the screen / detaching
+GLIDE_MS = anim.LONG             # a note sliding back onto the screen / detaching
 FRAME_MS = 15                    # one step of a slide
-FLASH_MS = 900                   # a new or reopened note's top bar fades from the theme color this long
-NEW_SLIDE_MS = 280               # a new note slides out from behind the note it was made from
+FLASH_MS = 400                   # a new or reopened note's top bar fades from the theme color this long
+NEW_SLIDE_MS = anim.LONG         # a new note slides out from behind the note it was made from
 GROUP_RING = (6, 9, 2)           # the line around notes moving together: gap, corner radius, width (px at 100 %)
 # short animations (ms): windows fade or slide; Tk cannot fade the widgets inside a window
-TIP_FADE_MS = 120                # a tooltip fades in
+TIP_FADE_MS = anim.FAST          # a tooltip fades in
 PEEK_OFFSET = (12, 18)           # a day's memo preview: down-right of the pointer (px at 100 %)
 PEEK_DROP = 10                   # ... it drops this far into place when the day changes
-PEEK_DROP_MS = 140
-ROLL_MS = 180                    # minimize: the note rolls up to its top bar
-DOCK_SLIDE_MS = 160              # ... then the bar slides down while fading
+PEEK_DROP_MS = anim.BASE 
+ROLL_MS = anim.BASE              # minimize: the note rolls up to its top bar
+DOCK_SLIDE_MS = anim.BASE        # ... then the bar slides down while fading
 SCREEN_POLL_MS = 1000            # the monitors are read this often (App.check_screens)
 SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stayed this long
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
-MENU_FADE_MS = 100               # a menu fades in
-OPEN_FADE_MS = 150               # a new or reopened note fades in (and blinks)
-CLOSE_FADE_MS = 120              # a closed note fades out
-CAL_SHOW_MS = 150                # the calendar slides out from its note and fades in (and back)
+MENU_FADE_MS = anim.FAST         # a menu fades in
+OPEN_FADE_MS = anim.FAST         # a new or reopened note fades in (and blinks)
+CLOSE_FADE_MS = anim.exit_ms(anim.FAST) # a closed note fades out
+CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
-HOVER_FADE_MS = 120              # the calendar turns solid under the mouse
-MONTH_SLIDE_MS = 280             # paging months: the shown one slides out as the next slides in
-VIEW_DIP_MS = 90                 # big <-> mini by the user's click: the calendar dips out this fast, then fades back
-DELETE_FLY_MS = 350              # a deleted memo's picture flies into the bin icon
-TOAST_RISE_MS = 150              # the Undo / notice bar rises into place ...
+HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
+MONTH_SLIDE_MS = anim.LONG       # paging months: the shown one slides out as the next slides in
+VIEW_DIP_MS = anim.FAST          # big <-> mini by the user's click: the calendar dips out this fast, then fades back
+DELETE_FLY_MS = anim.LONG        # a deleted memo's picture flies into the bin icon
+TOAST_RISE_MS = anim.BASE        # the Undo / notice bar rises into place ...
 TOAST_RISE = 10                  # ... from this far below (px at 100 %)
-HINT_DROP_MS = 150               # the first-start tips drop into place ...
+HINT_DROP_MS = anim.BASE         # the first-start tips drop into place ...
 HINT_DROP = 8                    # ... from this far above (px at 100 %)
-PICTURE_FADE_MS = 150            # the next picture (tab) fades over the last one
-CHIP_SETTLE_MS = 100             # a dropped memo title slides into its new day
-DONE_FADE_MS = 200               # a ticked to-do shows dark, then fades to its done color
+PICTURE_FADE_MS = anim.BASE      # the next picture (tab) fades over the last one
+CHIP_SETTLE_MS = anim.FAST       # a dropped memo title slides into its new day
+DONE_FADE_MS = anim.BASE         # a ticked to-do shows dark, then fades to its done color
 BIG_CELL = (100, 84)             # a day in the big month view (px at 100 %), until resized
 BIG_CELL_MIN, BIG_CELL_MAX = (64, 52), BIG_CELL     # never bigger than its default size (grip, docked or not)
 BIG_CELL_FILL = (220, 180)       # the stretch rule's "big could fill the note" test only (keeps its old hysteresis)
@@ -332,12 +332,6 @@ def fit_text(text: str, room: int, measure, min_char: int, ellipsis: str = "…"
 
 def _ease_out(t):
     return 1 - (1 - t) ** 3
-
-
-def _ease_out_sine(t):
-    """A soft ease out: it starts at half the cubic's speed, so a wide slide (paging months)
-    takes no big jump on its first frames."""
-    return math.sin(t * math.pi / 2)
 
 
 def animate(widget, key, ms, step, done=None, ease=_ease_out):
@@ -1117,7 +1111,7 @@ SCROLL_W = 5                     # the scroll thumb shown while scrolling (px at
 SCROLL_W_HOVER = 8               # ... under the mouse or dragged
 SCROLL_MIN = 24                  # ... never shorter than this
 SCROLL_HIDE_MS = 900             # it fades out this long after the view last moved ...
-SCROLL_FADE_MS = 260             # ... taking this long
+SCROLL_FADE_MS = anim.LONG       # ... taking this long
 
 
 class OverlayScroll:

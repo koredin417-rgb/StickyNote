@@ -772,7 +772,7 @@ SETTING_HELP = {
     "set_bin_days": "help_bin_days",
 }
 SETTING_COLORS = {"set_color": "memo", "set_default_color": "default", "set_theme_color": "theme"}
-SETTING_SLIDE_MS = 260           # a setting's page slides in over the list
+SETTING_SLIDE_MS = anim.LONG     # a setting's page slides in over the list
 SETTING_SLIDE_BACK = 0.28        # ... and the list steps back this much of its width
 
 
