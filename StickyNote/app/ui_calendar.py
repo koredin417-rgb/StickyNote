@@ -1632,7 +1632,7 @@ class CalendarPopup:
         for i, letter in enumerate(texts.week_letters()):
             color = c.sunday if i == 0 else c.saturday if i == 6 else c.muted
             g.create_text(i * cw + cw / 2, hh / 2, text=letter, fill=color, font=(UI_BOLD, 8, "bold"), tags=("wk",))
-        today, marked = date.today(), self.marked_days()
+        today = date.today()
         red = {d for d in holidays.in_year(y)} | {d for d in holidays.in_year(y - 1 if m == 1 else y + 1)}
         self._cells, self._chips, self._spots = [], [], {}
         weeks = _calendar.Calendar(firstweekday=6).monthdatescalendar(y, m)
