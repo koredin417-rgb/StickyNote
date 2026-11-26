@@ -34,12 +34,13 @@
 - The duplicate `calendar()` definition is removed (the first one never ran).
 - The duplicate `import calgeom` is removed.
 - **Left for later** (ledgered):
+  - `window_for` as a dict (it still searches the windows);
   - replacing `from ui_note import *` with explicit imports (the star chain is how `set_shared` reaches every part);
   - each module's unused imports, from the copied import block;
   - `settings_changed(key)` broadcast in place of the per-setter loops.
 
 ## Checks
 
-- [ ] The full suite (206 tests) passes.
-- [ ] The phase tools still run: `tools/interact_bench.py`, `tools/render_bench.py`, `tools/idle_bench.py` and `tools/look_capture.py`.
-- [ ] `app.py` is under 600 lines.
+- [x] The full suite (206 tests) passes.
+- [x] The phase tools still run: `tools/interact_bench.py`, `tools/render_bench.py`, `tools/idle_bench.py` and `tools/look_capture.py`.
+- [x] `app.py` is under 600 lines.

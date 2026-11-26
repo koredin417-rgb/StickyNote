@@ -854,3 +854,26 @@ Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after sett
   - a writer thread;
   - debug-build weakref checks of closed windows;
   - `hook_ime` only on windows with a text field.
+
+## Phase 7 results
+
+Done 2026-11-26 (`e96a7ea`). Plan: `docs/superpowers/plans/2026-11-26-phase7-module-split.md`.
+
+| Check | Result |
+|---|---|
+| `app.py` < 600 lines | **352** (was 2,997): `__init__`, start-up, quit, the date and signal handling, errors |
+| All phases' checks still pass | The 206 tests pass. The phase tools give the same results: `idle_bench` 2 wakeups in 10 s, 0.002 ms no-change save, 0.39 MB preview peak; `interact_bench` no frame over 2× in group drag or either resize; `render_bench` at most 9 live cards for 500 memos; `look_capture` all 7 states. |
+
+**The split:**
+- **App's methods move verbatim** into mixin classes: `taskbar`, `persist`, `screens`, `settings_ctl`, `registry`, `magnet`, `layout` and `tiles`.
+  - 162 methods moved, 15 stayed in `app.py`, and the first of two `calendar()` definitions (it never ran) is gone.
+  - App's module-level constants and helpers are in `appbase.py`.
+- **A fresh review checked it by script.** Every method's source, decorators and comments match the old ones character for character. Every global name a moved method reads resolves to the same object as before. Every module is an `_APP_PART` that `set_shared` reaches.
+
+**Left for later:**
+- separate objects with public methods instead of mixins over private reach-ins;
+- `window_for` as a dict;
+- explicit imports instead of `from ui_note import *` (then `set_shared` needs another way to reach every module);
+- each module's unused imports;
+- a `settings_changed(key)` broadcast;
+- single-use constants moved next to their only user (e.g. `PICTURE_BUDGET` into `registry`).
