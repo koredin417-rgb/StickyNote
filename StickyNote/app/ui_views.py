@@ -29,7 +29,21 @@ from ui_common import *  # noqa: F401,F403  (the parts before this one)
 
 
 # --------------------------------------------------------------------------- list page
-LIST_BATCH = 20                  # memo cards made at a time (the list makes more as it is scrolled)
+CARD_GUESS, HEAD_GUESS = 96, 28    # a row's height (px at 100 %) until it is made and measured
+KEEP_SCREENS = 1                 # rows this many screens above and below the view are made too ...
+BUILD_PER_PASS = 2               # ... a couple at a time (the rows in view at once): a far jump stays quick
+BUILD_AGAIN_MS = 15              # ... the next couple this much later
+DROP_PER_PASS, DROP_AGAIN_MS = 3, 40   # rows let go of are hidden at once, destroyed a few at a time later
+
+
+class _Row:
+    """One row of the memo list: a part head, a memo card or the empty page. Only the rows near
+    the view have a widget; the others are just their height (measured once made, else guessed)."""
+    __slots__ = ("kind", "key", "make", "y", "height", "widget")
+
+    def __init__(self, kind, key, make, height):
+        self.kind, self.key, self.make, self.height = kind, key, make, height
+        self.y, self.widget = 0, None
 SEARCH_DELAY_MS = 120            # the search runs once the typing pauses this long
 
 
@@ -41,7 +55,6 @@ class ListView:
         px = self.app.px
         self.day: str | None = None
         self._order: list[str] = []
-        self._shown: list = []          # pictures on the cards now (cached in App.picture)
         self.frame = tk.Frame(nw.views, bd=0)
 
         self.search_box = tk.Frame(self.frame, bd=0)
@@ -84,12 +97,20 @@ class ListView:
         self.area = ScrollArea(self.frame, self.app)
         self.area.canvas.pack(fill="both", expand=True)
         self.area.canvas.bind("<Configure>", self._on_resize, add="+")
+        self.area.listen(self._sync_soon)       # scrolled: the rows near the view are made
+        self.area.fine_steps(px(24))            # (to the pixel: the view follows a row being measured)
+        self.area.inner.unbind("<Configure>")   # (its scroll room is set here, from the rows' heights)
+        self.rows: list[_Row] = []
+        self._heights: dict = {}                # (kind, key, width) -> its height, measured
+        self._total = 0
+        self._sync_job = None
+        self._trash: list = []                  # rows' widgets let go of, destroyed a few at a time
+        self._trash_job = None
         self._width = 0
         self.cards: dict = {}           # note id -> (outer frame, card frame)
         self.pin_icons: dict = {}       # note id -> its pin icon
         self.preview: MemoPreview | None = None
         self._preview_job = self._hide_job = None
-        self._queue, self._next = [], 0     # parts of the list not made yet (see _build_more)
 
     # -- data
     def memos(self):
@@ -123,7 +144,16 @@ class ListView:
 
     # -- drawing
     def release(self):
-        """The window is closing: the search trace (held by Tcl) would keep it alive."""
+        """The window is closing: the search trace (held by Tcl) would keep it alive; the list's
+        own waiting passes go too."""
+        for job in (self._sync_job, self._trash_job):
+            if job is not None:
+                try:
+                    self.frame.after_cancel(job)
+                except tk.TclError:
+                    pass
+        self._sync_job = self._trash_job = None
+        self._trash = []
         name, self._search_trace = self._search_trace, None
         if name is not None:
             try:
@@ -152,62 +182,163 @@ class ListView:
             self.nw.win.after_cancel(job)
         for child in self.area.inner.winfo_children():
             child.destroy()
-        self._shown = []
+        self._trash = []                    # (destroyed with the rest)
         self.bin_icons, self.cards, self.pin_icons = {}, {}, {}
         self.sections, self.sort_switch = {}, None
         self._picked, self._painters = None, {}
         notes = self.memos()
         self._order = [n.id for n in notes]
+        px, rows = self.app.px, []
+
+        def row(kind, key, make, guess):
+            rows.append(_Row(kind, key, make, self._heights.get((kind, key, self._width), px(guess))))
         if not notes:
-            self._empty_state(c)
+            row("empty", None, lambda parent: self._empty_state(c, parent), 160)
         pinned = [n for n in notes if n.pinned]
         others = [n for n in notes if not n.pinned]
         searching = bool(self.search.get().strip())        # a search shows what it found, folded or not
         folded = set() if searching else set(self.app.prefs.list_collapsed)
-        queue = []
         if pinned:
-            queue.append(("head", ("pinned", tr("pinned_head", n=len(pinned), limit=self.app.prefs.pin_limit),
-                                   len(pinned), "pinned" in folded, c), {"icon": GLYPH["pinned"]}))
+            args = ("pinned", tr("pinned_head", n=len(pinned), limit=self.app.prefs.pin_limit),
+                    len(pinned), "pinned" in folded, c)
+            row("head", "pinned", lambda parent, a=args: self._section(*a, icon=GLYPH["pinned"], parent=parent),
+                HEAD_GUESS)
             if "pinned" not in folded:
-                queue += [("card", note, None) for note in pinned]
+                for note in pinned:
+                    row("card", note.id, lambda parent, n=note: self._card(n, parent), CARD_GUESS)
         if notes:                       # the memos' head is always there: it holds the sort switch
-            queue.append(("head", ("others", tr("others_head"), len(others), "others" in folded, c), {"sort": True}))
+            args = ("others", tr("others_head"), len(others), "others" in folded, c)
+            row("head", "others", lambda parent, a=args: self._section(*a, sort=True, parent=parent), HEAD_GUESS)
             if "others" not in folded:
-                queue += [("card", note, None) for note in others]
-        self._queue, self._next = queue, 0
-        self._build_more()
+                for note in others:
+                    row("card", note.id, lambda parent, n=note: self._card(n, parent), CARD_GUESS)
+        self.rows, self._total = rows, -1
         self._bin_badge()
         self.area.to_top()
-        self.frame.after_idle(self._more_if_near_end)
+        self._sync_window()
 
-    def _build_more(self, cards=LIST_BATCH) -> bool:
-        """Make the next ``cards`` memo cards (and the part heads on the way). Hundreds of
-        cards took seconds to make at once; the first ones show at once, the rest as the
-        list is scrolled (or walked with the arrow keys) toward them."""
-        made = 0
-        while self._next < len(self._queue) and made < cards:
-            kind, what, options = self._queue[self._next]
-            self._next += 1
-            if kind == "head":
-                self._section(*what, **options)
-            else:
-                self._card(what)
-                made += 1
-        return made > 0
+    def live_cards(self) -> int:
+        """How many memo cards exist now (the rest of the list is only heights)."""
+        return len(self.cards)
 
-    def _more_if_near_end(self):
-        """Less than a screen of cards left below what shows: make the next cards. (Measured
-        on the cards themselves: the scroll room is only updated later.)"""
+    def _sync_soon(self):
+        if self._sync_job is None:
+            self._sync_job = self.frame.after_idle(self._sync_later)
+
+    def _sync_later(self):
+        self._sync_job = None
+        self._sync_window()
+
+    def _sync_window(self):
+        """Make the rows within KEEP_SCREENS of the view and let go of the others; each row sits
+        where the rows above it end (a row made is measured, and the ones under it move)."""
+        if self._sync_job is not None:
+            try:
+                self.frame.after_cancel(self._sync_job)
+            except tk.TclError:
+                pass
+            self._sync_job = None
+        if getattr(self, "_syncing", False):    # (asked again while making a row: once this one is done)
+            self._resync = True
+            return
+        self._syncing = True
         try:
-            cv = self.area.canvas
-            if self._next >= len(self._queue) or not cv.winfo_ismapped():
-                return
-            self.area.inner.update_idletasks()
-            seen = cv.canvasy(cv.winfo_height())        # the bottom of what shows, in the list's pixels
-            if self.area.inner.winfo_reqheight() - seen < cv.winfo_height() and self._build_more():
-                self.frame.after_idle(self._more_if_near_end)
+            self._sync_rows()
+        finally:
+            self._syncing = False
+        if getattr(self, "_resync", False):
+            self._resync = False
+            self._sync_soon()
+
+    def _sync_rows(self):
+        cv = self.area.canvas
+        try:
+            view = cv.winfo_height() if cv.winfo_height() > 1 else self.nw.pad.height
+            top = cv.canvasy(0)
         except tk.TclError:
-            pass
+            return
+        # the row at the top of the view stays put on the screen while rows above it are made and
+        # measured (their heights were guesses): the view follows it
+        anchor = next((r for r in self.rows if r.y + r.height > top), None)
+        offset = top - anchor.y if anchor is not None else 0
+        lo, hi = top - view * KEEP_SCREENS, top + view * (1 + KEEP_SCREENS)
+        y, budget, more, made = 0, BUILD_PER_PASS, False, []
+        for r in self.rows:                 # what is near the view is made (unmeasured yet) ...
+            near = y < hi and y + r.height > lo
+            if near and r.widget is None:
+                seen = y < top + view and y + r.height > top
+                if seen or budget > 0:
+                    budget -= 0 if seen else 1
+                    self._make_row(r, y)
+                    made.append(r)
+                else:
+                    more = True
+            elif not near and r.widget is not None:
+                self._drop_row(r)
+            y += r.height
+        if made:                            # ... and measured together: one layout pass, not one a row
+            self.area.inner.update_idletasks()
+            for r in made:
+                h = r.widget.winfo_reqheight()
+                more = more or h < r.height     # (shorter than guessed: more rows may come near)
+                r.height = self._heights[(r.kind, r.key, self._width)] = h
+        y = 0
+        for r in self.rows:                 # each row where the rows above it end
+            if r.y != y:
+                r.y = y
+                if r.widget is not None:
+                    r.widget.place_configure(y=y)
+            y += r.height
+        if y != self._total:
+            self._total = y
+            self.area.inner.configure(height=max(1, y))
+            cv.configure(scrollregion=(0, 0, max(1, cv.winfo_width()), max(1, y)))
+        if anchor is not None and anchor.y + offset != top and y > 0:
+            cv.yview_moveto((anchor.y + offset) / y)
+        if more:
+            self._sync_job = self.frame.after(BUILD_AGAIN_MS, self._sync_later)
+
+    def _make_row(self, r, y):
+        box = tk.Frame(self.area.inner, bg=self.nw.colors.bg, bd=0)
+        box.place(x=0, y=y, relwidth=1)
+        r.widget = box
+        r.make(box)
+        if r.kind == "card" and r.key == self._picked and r.key in self._painters:
+            self._painters[r.key](True)
+
+    def _drop_row(self, r):
+        box, r.widget = r.widget, None
+        if r.kind == "card":
+            entry = self.cards.pop(r.key, None)
+            if entry is not None:
+                self.bin_icons.pop(entry[0], None)
+            self.pin_icons.pop(r.key, None)
+            self._painters.pop(r.key, None)
+        elif r.kind == "head":
+            self.sections.pop(r.key, None)
+            if r.key == "others":
+                self.sort_switch = None
+        try:
+            box.place_forget()              # (out of sight now; destroying ~10 cards took a frame)
+        except tk.TclError:
+            return
+        self._trash.append(box)
+        if self._trash_job is None:
+            self._trash_job = self.frame.after(DROP_AGAIN_MS, self._empty_trash)
+
+    def _empty_trash(self):
+        self._trash_job = None
+        batch, self._trash = self._trash[:DROP_PER_PASS], self._trash[DROP_PER_PASS:]
+        for box in batch:
+            try:
+                box.destroy()
+            except tk.TclError:
+                pass
+        if self._trash:
+            try:
+                self._trash_job = self.frame.after(DROP_AGAIN_MS, self._empty_trash)
+            except tk.TclError:
+                self._trash = []
 
     def _bin_badge(self):
         """The way into the bin: its icon with a red dot on its corner while the bin holds memos (badge
@@ -229,8 +360,9 @@ class ListView:
         for w in (self.bin_row, self.bin_glyph):
             w.configure(bg=c.hover if on else c.bg)
 
-    def _empty_state(self, c):
+    def _empty_state(self, c, parent=None):
         px = self.app.px
+        inner = parent or self.area.inner
         if self.day:
             glyph, text = GLYPH["calendar"], tr("none_on", day=_date_label(self.day))
         elif self.search.get().strip():
@@ -238,20 +370,20 @@ class ListView:
         else:
             glyph, text = GLYPH["empty_note"], tr("none_yet")
         self.empty_text = text
-        empty_page(self.app, self.area.inner, c, glyph, text)
-        tk.Frame(self.area.inner, bg=c.bg, height=px(6)).pack()
+        empty_page(self.app, inner, c, glyph, text)
+        tk.Frame(inner, bg=c.bg, height=px(6)).pack()
         if self.day:
-            b = FlatButton(self.area.inner, tr("new_on_day"),
+            b = FlatButton(inner, tr("new_on_day"),
                            lambda d=self.day: self.nw.new_memo(date=d))
             b.recolor(c)
             b.pack()
 
-    def _section(self, key, text, count, folded, c, sort=False, icon=None):
+    def _section(self, key, text, count, folded, c, sort=False, icon=None, parent=None):
         """A part's head: ▾ / ▸ and its name (click: fold / unfold); the memos' head also
         has the sort switch on the right (click: by date ↔ as added). ``icon`` stands before
         the name (the pinned part: a pin and "2 / 5")."""
         px = self.app.px
-        row = tk.Frame(self.area.inner, bg=c.bg, bd=0, cursor="hand2")
+        row = tk.Frame(parent or self.area.inner, bg=c.bg, bd=0, cursor="hand2")
         row.pack(fill="x", padx=(px(10), px(12)), pady=(px(2), px(3)))
         chevron = tk.Label(row, bg=c.bg, bd=0)
         chevron.pack(side="left", padx=(0, px(3)))
@@ -309,7 +441,7 @@ class ListView:
         Tooltip(word, tr("tip_sort"))
         self.sort_switch = word
 
-    def _card(self, note: Note):
+    def _card(self, note: Note, parent=None):
         px = self.app.px
         c = Colors.of(self.frame, note.color)
         current = note is self.nw.note
@@ -322,7 +454,8 @@ class ListView:
         head_lit = shade(self.frame, head_rest, 1)
         meta = readable(self.frame, c.muted, head_lit, MARK_CONTRAST)      # date and icons on the strip
 
-        outer = tk.Frame(self.area.inner, bg=_mix(self.frame, note.color, c.fg, 0.3 if current else 0.22), bd=0)
+        outer = tk.Frame(parent or self.area.inner, bg=_mix(self.frame, note.color, c.fg, 0.3 if current else 0.22),
+                         bd=0)
         outer.pack(fill="x", padx=px(10), pady=(0, px(8)))
         card = tk.Frame(outer, bg=c.bg, bd=0)
         card.pack(fill="both", expand=True, padx=1, pady=1)
@@ -417,13 +550,11 @@ class ListView:
 
     # -- keyboard
     def shown_ids(self) -> list[str]:
-        """The memo cards on the page now, top to bottom (not those in a folded part)."""
-        return [i for i in self._order if i in self.cards]
+        """The memo cards on the page, top to bottom (not those in a folded part), made or not."""
+        return [r.key for r in self.rows if r.kind == "card"]
 
     def step_pick(self, delta):
         ids = self.shown_ids()
-        if delta > 0 and ids and self._picked == ids[-1] and self._build_more():
-            ids = self.shown_ids()              # walked past the last card made: make more
         if not ids:
             return
         if self._picked in ids:
@@ -436,9 +567,23 @@ class ListView:
         old, self._picked = self._picked, note_id
         if old in self._painters:
             self._painters[old](False)
+        row = next((r for r in self.rows if r.kind == "card" and r.key == note_id), None)
+        if row is None:
+            return
+        for _ in range(2):                  # (made and measured on the way: its height may change)
+            self._reveal(row)
         if note_id in self._painters:
             self._painters[note_id](True)
-            self.area.show(self.cards[note_id][0])
+
+    def _reveal(self, row):
+        """Scroll just enough that ``row`` is fully seen, and make it."""
+        cv = self.area.canvas
+        total, view, first = max(1, self._total), cv.winfo_height(), cv.canvasy(0)
+        if row.y < first:
+            cv.yview_moveto(row.y / total)
+        elif row.y + row.height > first + view:
+            cv.yview_moveto(max(0, row.y + row.height - view) / total)
+        self._sync_window()
 
     def open_picked(self):
         ids = self.shown_ids()
@@ -512,7 +657,6 @@ class ListView:
             return
         self.hide_preview()
         self.area.wheel(event)
-        self._more_if_near_end()
 
     def card_preview(self, card, note, c, width):
         """Header, pictures and the first lines of a memo, inside a card."""
@@ -586,14 +730,13 @@ class ListView:
                 tk.Label(row, text=f"+{len(note.images) - i}", bg=c.bg, fg=c.muted,
                          font=(UI_BOLD, 9, "bold")).pack(side="left", padx=px(2))
                 break
-            tk.Label(row, image=thumb, bg=c.bg, bd=0).pack(side="left", padx=(0, px(4)))
+            pic = tk.Label(row, image=thumb, bg=c.bg, bd=0)
+            pic.image = thumb               # (held by its label: let go of with the card)
+            pic.pack(side="left", padx=(0, px(4)))
             used += thumb.width() + px(4)
 
     def _thumb(self, name, box):
-        photo = self.app.picture(name, box)
-        if photo is not None:
-            self._shown.append(photo)       # keep it while a card shows it
-        return photo
+        return self.app.picture(name, box)
 
     def _card_menu(self, event, note):
         self.hide_preview()
@@ -608,7 +751,7 @@ class ListView:
          .popup(event.x_root, event.y_root))
 
     def _on_resize(self, event):
-        self.frame.after_idle(self._more_if_near_end)      # shown (or taller): fill the screen
+        self._sync_soon()                                   # shown (or taller): fill the screen
         if abs(event.width - self._width) > 4:
             self._width = event.width
             if self.nw.view == "list":

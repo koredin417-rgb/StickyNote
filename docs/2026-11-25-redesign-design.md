@@ -747,3 +747,64 @@ Two rare ones are deferred (see the PR).
 - `plan_growth` candidates are not pre-filtered. `plan_resize` costs 0.4 ms with 20 notes, and the filter would risk the results.
 - The gesture code stays in `NoteWindow` instead of a new `interact.py`; Phase 7 splits modules.
 - The single resize's remaining 13.6 ms p50 is mostly the pushed notes' own window moves.
+
+## Phase 5 results
+
+Recorded 2026-11-26 with `tools/render_bench.py` on Phase 4 code (`docs/perf/phase5-before.json`) and on Phase 5 code (`docs/perf/phase5.json`): a 500-memo list scrolled top to bottom in 41 jumps, 12 calendar day picks, and 20 keystrokes on line 1500 of a 3000-line memo.
+
+| Measure | Before | After |
+|---|---|---|
+| Memo cards alive, 500-memo list (most at once) | 140 (and growing as you scroll on) | **9** |
+| USER objects after scrolling the list | 1,403 | 207 |
+| Private memory, list shown and scrolled | +10.2 MB | +2.5 MB |
+| Keystroke in a 3000-line memo (p50 / max) | 11.6 / 12.7 ms | **0.15 / 0.28 ms** |
+| Calendar day pick, month redrawn? | yes (a full draw) | no: only the old and new day (tests) |
+| Showing the 500-memo list | 347 ms | 296 ms |
+| Scrolling it top to bottom in 41 jumps (the bench's total) | 1,475 ms | 5,893 ms |
+
+The scroll totals measure different work:
+- **Before:** the list stopped making cards once 140 were made, and jumps back over them cost nothing.
+- **After:** every jump makes the cards it lands on and lets go of the ones it left.
+- **What each costs:** a single far jump costs about 95 ms per frame, and a wheel notch 0.3 ms, or 38 ms when the notch makes a card.
+
+**Done criteria:**
+- **The list:** a 500-memo list holds ≤ 40 cards. Met: at most 9 alive, checked at every step of a top-to-bottom scroll (test).
+- **The calendar:** hover and selection make no full redraw. Met: hover since Phase 1; a day pick and a memo pick now repaint only their own items (tests). A pick still takes about 17 ms, mostly the memo list showing that day's memos.
+
+**How it works:**
+- **The list is a virtual column:**
+  - every row has its place from the measured heights of the rows above it;
+  - only rows within a screen of the view exist;
+  - the rows in view are made at once, the rest two at a time;
+  - all rows made in a pass are measured in one layout pass;
+  - rows let go of are hidden at once and destroyed a few at a time;
+  - the row at the top of the view holds still while rows above it are measured;
+  - arrow keys reach every memo, making the picked card and scrolling to it.
+- **Typing** re-tags only the lines it touched, plus the cursor's line and its neighbours. When more lines came or went than that (an undo, say), the whole memo is re-tagged as before.
+
+**Known limit:** a far jump (dragging the scroll thumb into rows not seen yet) still takes about 95 ms per frame. That is the layout of a screen of cards' wrapped text labels. Wheel scrolling costs 0.3 ms per notch, 38 ms at a notch that makes a card. Cheaper cards (drawn on one canvas instead of about 20 widgets each) would be the next step.
+
+**Not done, by decision:**
+- **No `DayIndex` keyed by a store revision.** The store has no revision, and notes change in place in many places.
+- **The picture viewer (§5.4.4)** goes with images in Phase 6.
+
+**Left for later** (spec §5.4.1–§5.4.3 items this phase did not do; the review listed them):
+- **Calendar, §5.4.1:**
+  - `_fit` is not memoized and still cuts text linearly;
+  - a day click still waits `DOUBLE_CLICK_MS` before acting;
+  - `_peek_at` has no paging guard;
+  - the big view builds its `tkfont.Font` measurers at every draw;
+  - the count card image is not cached.
+- **Memo list, §5.4.2:**
+  - cards are not kept by note id, and `refresh_lists(note_id)` doesn't exist, so a pin, unpin, trash or width change rebuilds the list's rows, now only the visible ones;
+  - the bin is not virtual;
+  - the preview window is not reused;
+  - the list goes back to the top after a pin or trash.
+- **Note text, §5.4.3:**
+  - the ranged pass removes and re-adds the tags of its few lines rather than only where a line's mark changed;
+  - `calendar_buttons()` still visits every window.
+
+**Review fixes** (a fresh whole-branch review found 0 critical and 3 important issues; all are fixed, each with a test that failed first, in `test_phase5_review.py`):
+- **Undo or redo of a bullet or to-do toggle over several lines** left wrong tags (struck-through lines that were no longer to-dos). Deletes now report the line they joined at, and that line is re-tagged.
+- **The wheel over the list's scroll thumb** moved 1 px a notch; it now moves 24, as over the list.
+- **The pictures on cards** were kept for the list's life, growing about 6 MB per scroll through a picture-heavy list. Each card's labels now hold their own pictures, which go with the card.

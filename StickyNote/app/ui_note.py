@@ -1728,7 +1728,19 @@ class NoteWindow:
         if not self.body.edit_modified():
             return
         self.body.edit_modified(False)
-        self._refresh_bullets()
+        b = self.body
+        count = int(b.index("end-1c").split(".")[0])
+        row = int(b.index("insert").split(".")[0])
+        lo, hi = row - 1, row + 1                   # the lines around the cursor, and those typed into
+        t, self._touched = getattr(self, "_touched", None), None
+        if t:
+            lo, hi = min(lo, t[0] - 1), max(hi, t[1] + 1)
+        before, self._line_count = getattr(self, "_line_count", None), count
+        if before is None or abs(count - before) > hi - lo:
+            self._refresh_bullets()                 # (more lines came or went than those: an undo, say)
+            self._refresh_combined()
+        else:
+            self._refresh_bullets(max(1, lo), min(count, hi))
         self._sync_soon()
 
     def _sync_soon(self):
@@ -1755,6 +1767,10 @@ class NoteWindow:
     def _text_event(self, what, *args):
         if what == "inserted":
             self._typed(*args)
+        elif what == "deleted":             # the line it joined at is re-tagged (_on_body_modified)
+            row = int(str(args[0]).split(".")[0])
+            t = getattr(self, "_touched", None)
+            self._touched = (min(row, t[0]), max(row, t[1])) if t else (row, row)
         elif what == "moved" and not self._raw:
             self._pending = None
             self._update_format_buttons()
@@ -1766,7 +1782,10 @@ class NoteWindow:
         fmt = self._pending if self._pending is not None else self._formats_before(start, end)
         for kind in MARK_KINDS:
             (self.body.tag_add if kind in fmt else self.body.tag_remove)(kind, start, end)
-        self._refresh_combined()
+        first, last = int(str(start).split(".")[0]), int(str(self.body.index(end)).split(".")[0])
+        t = getattr(self, "_touched", None)         # (the lines <<Modified>> re-tags: _on_body_modified)
+        self._touched = (min(first, t[0]), max(last, t[1])) if t else (first, last)
+        self._refresh_combined(first, last)
         self._update_format_buttons()
         self._sync_soon()
 
@@ -1814,25 +1833,49 @@ class NoteWindow:
         b.focus_set()
         return "break"
 
-    def _refresh_combined(self):
-        """Text that is both bold and italic needs its own font: tag "bi"."""
+    def _tag_spans(self, tag, start, end):
+        """``tag``'s ranges cut to start..end (a range that begins before start included)."""
+        b, out = self.body, []
+        prev = b.tag_prevrange(tag, start)
+        if prev and b.compare(prev[1], ">", start):
+            out.append((start, prev[1]))
+        at = start
+        while True:
+            r = b.tag_nextrange(tag, at, end)
+            if not r:
+                break
+            out.append(r)
+            at = r[1]
+        return [(s_, e_ if b.compare(e_, "<", end) else end) for s_, e_ in out]
+
+    def _refresh_combined(self, first=None, last=None):
+        """Text that is both bold and italic needs its own font: tag "bi". ``first``..``last``:
+        only those lines (typing), else the whole text."""
         b = self.body
-        b.tag_remove("bi", "1.0", "end")
-        bold, ital = b.tag_ranges("b"), b.tag_ranges("i")
-        for s1, e1 in zip(bold[0::2], bold[1::2]):
-            for s2, e2 in zip(ital[0::2], ital[1::2]):
+        start, end = ("1.0", "end") if first is None else (f"{first}.0", f"{last}.end")
+        b.tag_remove("bi", start, end)
+        if first is None:
+            bold, ital = b.tag_ranges("b"), b.tag_ranges("i")
+            bold, ital = list(zip(bold[0::2], bold[1::2])), list(zip(ital[0::2], ital[1::2]))
+        else:
+            bold, ital = self._tag_spans("b", start, end), self._tag_spans("i", start, end)
+        for s1, e1 in bold:
+            for s2, e2 in ital:
                 s = s1 if b.compare(s1, ">", s2) else s2
                 e = e1 if b.compare(e1, "<", e2) else e2
                 if b.compare(s, "<", e):
                     b.tag_add("bi", s, e)
 
-    def _refresh_bullets(self):
+    def _refresh_bullets(self, first=None, last=None):
         """Bulleted and to-do lines wrap under their text, not under the mark; a to-do's box
-        is drawn in the box font, and a done to-do is crossed out in a faint color."""
+        is drawn in the box font, and a done to-do is crossed out in a faint color.
+        ``first``..``last``: only those lines (typing), else every line."""
         b = self.body
+        start, end, row0 = ("1.0", "end", 1) if first is None else (f"{first}.0", f"{last}.end", first)
         for tag in ("bullet", "todo", "todo_box", "todo_done"):
-            b.tag_remove(tag, "1.0", "end")
-        for row, line in enumerate(b.get("1.0", "end-1c").split("\n"), start=1):
+            b.tag_remove(tag, start, end)
+        text = b.get("1.0", "end-1c") if first is None else b.get(start, end)
+        for row, line in enumerate(text.split("\n"), start=row0):
             if line.startswith(BULLET):
                 b.tag_add("bullet", f"{row}.0", f"{row}.end")
             elif line.startswith((TODO, DONE)):

@@ -127,9 +127,11 @@ class Driver:
         t0 = time.perf_counter()
         nw.show_list()
         built = 0
-        while nw.list_view._build_more():
-            built += 1
+        lv = nw.list_view                   # scrolled top to bottom: only the cards near the view are made
+        for k in range(41):
+            lv.area.canvas.yview_moveto(k / 40)
             self.root.update()
+            built = max(built, lv.live_cards())
         return {"list_build_ms": round((time.perf_counter() - t0) * 1000, 1), "batches": built}
 
     def open_close_50(self):

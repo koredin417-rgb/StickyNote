@@ -1296,10 +1296,28 @@ class ScrollArea:
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._item, width=e.width))
         self.scroll = OverlayScroll(self.canvas, app)
+        self._listeners: list = []
+        self.step = 1                       # units a wheel notch scrolls (see fine_steps)
+
+    def fine_steps(self, notch):
+        """Scroll to the pixel (the view can be put anywhere), ``notch`` px a wheel notch."""
+        self.canvas.configure(yscrollincrement=1)
+        self.step = self.scroll.units = notch       # (the wheel over the thumb as over the list)
+
+    def listen(self, fn):
+        """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
+        if not self._listeners:
+            self.canvas.configure(yscrollcommand=self._yscroll)
+        self._listeners.append(fn)
+
+    def _yscroll(self, first, last):
+        self.scroll._set(first, last)
+        for fn in self._listeners:
+            fn()
 
     def wheel(self, event):
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            self.canvas.yview_scroll((-1 if event.delta > 0 else 1) * self.step, "units")
 
     def to_top(self):
         self.canvas.yview_moveto(0)
@@ -1362,6 +1380,12 @@ proc ::sticky::text_proxy {w callback args} {
             $callback inserted $at [$orig index "$at + [string length $chars] chars"]
             return $result
         }
+        delete {
+            set at [$orig index [lindex $args 1]]
+            set result [$orig {*}$args]
+            $callback deleted $at
+            return $result
+        }
         mark {
             set result [$orig {*}$args]
             if {[lindex $args 1] eq "set" && [lindex $args 2] eq "insert"} {$callback moved}
@@ -1400,8 +1424,8 @@ def _fill_rich_text(text: tk.Text, body, marks, inline, embed):
 
 
 def _watch_text(text: tk.Text, callback):
-    """Call ``callback("inserted", start, end)`` after every insert and
-    ``callback("moved")`` after every cursor move in ``text``."""
+    """Call ``callback("inserted", start, end)`` after every insert, ``callback("deleted", at)``
+    after every delete and ``callback("moved")`` after every cursor move in ``text``."""
     t = text.tk
     if not t.call("info", "commands", "::sticky::text_proxy"):
         t.eval(_TEXT_PROXY)
