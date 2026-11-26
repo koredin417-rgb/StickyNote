@@ -1,0 +1,14 @@
+{
+ "idle_wakeups_10s": 333,
+ "by_callback": {
+  "_drain_syscommands": 322,
+  "_poll_screens": 10,
+  "_run_idle": 1
+ },
+ "save_no_change_ms": 0.282,
+ "thumbnail_biggest_image": [
+  976,
+  648
+ ],
+ "thumbnail_biggest_mb": 2.41
+}

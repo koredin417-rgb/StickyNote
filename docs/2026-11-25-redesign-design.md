@@ -808,3 +808,40 @@ The scroll totals measure different work:
 - **Undo or redo of a bullet or to-do toggle over several lines** left wrong tags (struck-through lines that were no longer to-dos). Deletes now report the line they joined at, and that line is re-tagged.
 - **The wheel over the list's scroll thumb** moved 1 px a notch; it now moves 24, as over the list.
 - **The pictures on cards** were kept for the list's life, growing about 6 MB per scroll through a picture-heavy list. Each card's labels now hold their own pictures, which go with the card.
+
+## Phase 6 results
+
+Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after settling. Phase 5 code is in `docs/perf/phase6-before.json`, Phase 6 code in `docs/perf/phase6.json`.
+
+| Measure | Before | After | Done criterion |
+|---|---|---|---|
+| Wakeups in 10 s idle | 333 (`_drain_syscommands` 322, `_poll_screens` 10, clock idle 1) | **2** (one screen check, one clock idle) | < 1/s: **met** |
+| Save with nothing changed | 0.28 ms (serialised, then compared) | **0.001 ms** | ≈ 0 ms: **met** |
+| Taskbar preview, biggest picture made | 976 × 648 (2.4 MB) | 320 × 320 (0.39 MB: one window's own) | peak < 4 MB: **met** |
+| Kill during a save | — | `notes.json` still loads with the last content (test) | **met** |
+
+**How:**
+- **A wake channel (`waker.py`).**
+  - It is a loopback socket that Tcl reads with `fileevent`. The Windows message hooks ping it without calling tkinter, which deadlocks there.
+  - A second launch and the installer send "show" / "quit" to the port in `wake.port`; the signal files stay as a fallback, checked every 10 s.
+  - Display, setting and DPI changes wake a monitor check (a 15 s safety poll stays, 300 ms while a change settles).
+  - The date is checked at midnight and on a clock change or resume.
+  - The taskbar preview is looked at after changes, not at every drain.
+- **Saving.**
+  - Every attribute set on a note, pad or prefs counts as an edit, and a save with none since returns at once. The save at exit still reads and compares everything.
+  - The file is compact, and it is `fsync`ed before it replaces the old one.
+- **Bounded data:**
+  - pictures are kept by bytes (64 MB);
+  - the note places of the 8 setups seen last are kept (16 auto layout homes);
+  - the closed list keeps 20.
+
+**Not done, by decision:**
+- **No image worker thread.** Pictures still decode on the UI thread.
+- **`persist.py` as a module** is Phase 7's split.
+- **Not done here (left for later):**
+  - `ImageCache` for icons, tiles and inline photos;
+  - the theme eviction;
+  - per-note cached JSON;
+  - a writer thread;
+  - debug-build weakref checks of closed windows;
+  - `hook_ime` only on windows with a text field.
