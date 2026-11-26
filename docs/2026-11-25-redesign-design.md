@@ -808,3 +808,72 @@ The scroll totals measure different work:
 - **Undo or redo of a bullet or to-do toggle over several lines** left wrong tags (struck-through lines that were no longer to-dos). Deletes now report the line they joined at, and that line is re-tagged.
 - **The wheel over the list's scroll thumb** moved 1 px a notch; it now moves 24, as over the list.
 - **The pictures on cards** were kept for the list's life, growing about 6 MB per scroll through a picture-heavy list. Each card's labels now hold their own pictures, which go with the card.
+
+## Phase 6 results
+
+Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after settling. Phase 5 code is in `docs/perf/phase6-before.json`, Phase 6 code in `docs/perf/phase6.json`.
+
+| Measure | Before | After | Done criterion |
+|---|---|---|---|
+| Wakeups in 10 s idle | 333 (`_drain_syscommands` 322, `_poll_screens` 10, clock idle 1) | **2** (one screen check, one clock idle); about 3 in the real app, which also checks the signal files every 10 s | < 1/s: **met** |
+| Save with nothing changed | 0.28 ms (serialised, then compared) | **0.001 ms** | ≈ 0 ms: **met** |
+| Taskbar preview, biggest picture made | 976 × 648 (2.4 MB) | 320 × 320 (0.39 MB: one window's own) | peak < 4 MB: **met** |
+| Kill during a save | — | `notes.json` still loads with the last content (test) | **met** |
+
+**How:**
+- **A wake channel (`waker.py`).**
+  - It is a loopback socket that Tcl reads with `fileevent`. The Windows message hooks ping it without calling tkinter, which deadlocks there.
+  - A second launch and the installer send "show" / "quit" to the port in `wake.port`; the signal files stay as a fallback, checked every 10 s.
+  - Display, setting and DPI changes wake a monitor check (a 15 s safety poll stays, 300 ms while a change settles).
+  - The date is checked at midnight and on a clock change or resume.
+  - The taskbar preview is looked at after changes, not at every drain.
+- **Saving.**
+  - Every attribute set on a note, pad or prefs counts as an edit, and a save with none since returns at once. The save at exit still reads and compares everything.
+  - The file is compact, and it is `fsync`ed before it replaces the old one.
+- **Bounded data:**
+  - pictures are kept by bytes (64 MB);
+  - the note places of the 8 setups seen last are kept (16 auto layout homes);
+  - the closed list keeps 20.
+
+**Review fixes.** A fresh whole-branch review found 1 critical and 2 important issues. They are fixed with seven more re-graded by what a user would see, each with a test that failed first (`tests/test_phase6_review.py`):
+- **The app minimized without a taskbar click (Win+M)** went unnoticed. Tk takes `WM_SIZE` itself, so the hook now watches `WM_WINDOWPOSCHANGED` with `IsIconic`. A restore in the same batch wins over the undo.
+- **Deleting from the bin, emptying it and the midnight purge** were not written at once, because only the notes dict changed. They now mark the save, and the set of notes and windows is part of "nothing changed".
+- **A wake channel that can't start** falls back to the old 30 ms drain and the 0.8 s signal files. A ping never connects and never waits.
+- **A burst of minimizes (Win+D)** is gathered for `MULTI_MIN_MS` and handled as one, without animation, as before.
+- **The port needs a random token** from the port file. Without it no other program, user or web page can make the app quit or come forward. Each connection has its own buffer, and data that arrives with EOF is read first.
+- **Windows shutting down or signing out** (`WM_QUERYENDSESSION`, Tk's `WM_SAVE_YOURSELF`) saves everything.
+- **The 15 s monitor check also looks at the date**, for a sleep with no resume message.
+
+**Not done, by decision:**
+- **No image worker thread.** Pictures still decode on the UI thread.
+- **`persist.py` as a module** is Phase 7's split.
+- **Not done here (left for later):**
+  - `ImageCache` for icons, tiles and inline photos;
+  - the theme eviction;
+  - per-note cached JSON;
+  - a writer thread;
+  - debug-build weakref checks of closed windows;
+  - `hook_ime` only on windows with a text field.
+
+## Phase 7 results
+
+Done 2026-11-26 (`e96a7ea`). Plan: `docs/superpowers/plans/2026-11-26-phase7-module-split.md`.
+
+| Check | Result |
+|---|---|
+| `app.py` < 600 lines | **352** (was 2,997): `__init__`, start-up, quit, the date and signal handling, errors |
+| All phases' checks still pass | The 206 tests pass. The phase tools give the same results: `idle_bench` 2 wakeups in 10 s, 0.002 ms no-change save, 0.39 MB preview peak; `interact_bench` no frame over 2× in group drag or either resize; `render_bench` at most 9 live cards for 500 memos; `look_capture` all 7 states. |
+
+**The split:**
+- **App's methods move verbatim** into mixin classes: `taskbar`, `persist`, `screens`, `settings_ctl`, `registry`, `magnet`, `layout` and `tiles`.
+  - 162 methods moved, 15 stayed in `app.py`, and the first of two `calendar()` definitions (it never ran) is gone.
+  - App's module-level constants and helpers are in `appbase.py`.
+- **A fresh review checked it by script.** Every method's source, decorators and comments match the old ones character for character. Every global name a moved method reads resolves to the same object as before. Every module is an `_APP_PART` that `set_shared` reaches.
+
+**Left for later:**
+- separate objects with public methods instead of mixins over private reach-ins;
+- `window_for` as a dict;
+- explicit imports instead of `from ui_note import *` (then `set_shared` needs another way to reach every module);
+- each module's unused imports;
+- a `settings_changed(key)` broadcast;
+- single-use constants moved next to their only user (e.g. `PICTURE_BUDGET` into `registry`).

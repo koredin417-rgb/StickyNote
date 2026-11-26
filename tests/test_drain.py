@@ -35,7 +35,8 @@ class DrainTest(unittest.TestCase):
         t = time.perf_counter()
         self.app._syscommands += [("min", winapi.hwnd_of(w.win), t) for w in wins]
         with patched(type(wins[0]), "minimize", Spy()) as m:
-            self.app._drain_syscommands()
+            self.app._drain_syscommands()           # (a burst is gathered for MULTI_MIN_MS since Phase 6)
+            pump(self.app, lambda: m.call_count == 2, timeout=0.5)
         self.assertEqual(m.call_count, 2)
         self.assertTrue(all(kw.get("animate") is False for _a, kw in m.calls))
 

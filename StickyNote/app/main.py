@@ -23,8 +23,10 @@ def main() -> None:
     signal = folder / "show.signal"
     instance = winapi.acquire_single_instance(MUTEX_NAME)
     if instance is None:                       # already running: ask it to come forward
-        folder.mkdir(parents=True, exist_ok=True)
-        signal.touch()
+        import waker
+        if not waker.send(folder / "wake.port", "show"):    # (an older app: it checks the file)
+            folder.mkdir(parents=True, exist_ok=True)
+            signal.touch()
         return
 
     winapi.set_dpi_aware()
