@@ -761,18 +761,18 @@ class MemoPreview:
 SETTING_GROUPS = (
     ("grp_memo", ("set_color", "set_font")),
     ("grp_look", ("set_default_color", "set_theme_color", "set_cursor", "set_transparency")),
-    ("grp_place", ("set_snap", "set_auto_layout", "set_minimize")),
+    ("grp_place", ("set_snap", "set_auto_layout", "set_minimize", "set_motion")),
     ("grp_general", ("set_language", "set_date_format", "set_pin_limit", "set_bin_days")),
 )
 SETTING_HELP = {
     "set_color": "help_color", "set_font": "help_font", "set_default_color": "help_default_color",
     "set_theme_color": "help_theme_color", "set_cursor": "help_cursor", "set_transparency": "help_transparency",
-    "set_snap": "help_snap", "set_auto_layout": "help_auto_layout", "set_minimize": "tip_minimize_style",
+    "set_snap": "help_snap", "set_auto_layout": "help_auto_layout", "set_minimize": "tip_minimize_style", "set_motion": "help_motion",
     "set_language": "help_language", "set_date_format": "help_date_format", "set_pin_limit": "help_pin_limit",
     "set_bin_days": "help_bin_days",
 }
 SETTING_COLORS = {"set_color": "memo", "set_default_color": "default", "set_theme_color": "theme"}
-SETTING_SLIDE_MS = 260           # a setting's page slides in over the list
+SETTING_SLIDE_MS = anim.LONG     # a setting's page slides in over the list
 SETTING_SLIDE_BACK = 0.28        # ... and the list steps back this much of its width
 
 
@@ -788,6 +788,7 @@ class SettingsView:
         self.detail_area = ScrollArea(self.frame, self.app)
         self.area = self.list_area
         self.opened: str | None = None          # the setting open now (a SETTING_ROWS key)
+        self._page_u = 0.0                      # 0: the list shows, 1: a setting's page (_slide_page)
         self.labels, self.flat, self.muted = [], [], []
         self.pages: dict = {}                   # key -> its page in detail_area
         self.list_rows: dict = {}               # key -> (row, name, value, dot, chevron)
@@ -910,6 +911,17 @@ class SettingsView:
             self.min_buttons[style] = b
             self.flat.append(b)
 
+        body = page("set_motion")
+        row = tk.Frame(body, bd=0)
+        row.pack(fill="x", **pad)
+        self.rows.append(row)
+        self.motion_buttons = {}
+        for i, mode in enumerate(("full", "reduced", "off")):
+            b = FlatButton(row, tr(f"motion_{mode}"), lambda m=mode: self.app.set_motion(m))
+            b.grid(row=0, column=i, sticky="w", padx=(0, px(4)))
+            self.motion_buttons[mode] = b
+            self.flat.append(b)
+
         body = page("set_bin_days")
         row = tk.Frame(body, bd=0)
         row.pack(fill="x", **pad)
@@ -995,6 +1007,7 @@ class SettingsView:
             "set_snap": lambda: tr("snap_off") if prefs.snap_gap is None else f"{prefs.snap_gap}px",
             "set_auto_layout": lambda: tr("auto_on" if prefs.auto_layout else "auto_off"),
             "set_minimize": lambda: tr(f"min_{prefs.minimize_style}"),
+            "set_motion": lambda: tr(f"motion_{self.app.clock.mode}"),
             "set_language": lambda: dict(texts.LANGUAGES).get(texts.language(), ""),
             "set_date_format": lambda: texts.day_label(date.today(), texts.date_format()),
             "set_pin_limit": lambda: str(prefs.pin_limit),
@@ -1030,13 +1043,23 @@ class SettingsView:
         self.pages[key].pack(fill="x")
         self.detail_area.to_top()
         lst, det = self.list_area.canvas, self.detail_area.canvas
-        det.place(relx=1, rely=0, relwidth=1, relheight=1)
+        u = self._page_u                        # (a close still sliding: it turns back from there)
+        det.place(relx=1 - u, rely=0, relwidth=1, relheight=1)
+        lst.place(relx=-SETTING_SLIDE_BACK * u, rely=0, relwidth=1, relheight=1)
         tk.Misc.tkraise(det)
+        self._slide_page(1.0, lambda: lst.place_forget())
 
-        def step(k):
-            det.place_configure(relx=1 - k)
-            lst.place_configure(relx=-SETTING_SLIDE_BACK * k)
-        animate(self.frame, "settings_page", SETTING_SLIDE_MS, step, lambda: lst.place_forget())
+    def _slide_page(self, to, done):
+        """The page's place, ``u`` from 0 (the list) to 1 (a setting): one tween, so a click the
+        other way while it slides turns it back from where it is."""
+        lst, det = self.list_area.canvas, self.detail_area.canvas
+
+        def write(u):
+            self._page_u = u
+            det.place_configure(relx=1 - u)
+            lst.place_configure(relx=-SETTING_SLIDE_BACK * u)
+        anim.clock_of(self.frame).tween(self.frame, "place:settings", to, SETTING_SLIDE_MS,
+                                        read=lambda: self._page_u, write=write, done=done)
 
     def close(self, animated=True):
         """Back to the list (the back arrow, Esc). True if a setting was open."""
@@ -1045,16 +1068,14 @@ class SettingsView:
         self.opened = None
         self._sync_rows()
         lst, det = self.list_area.canvas, self.detail_area.canvas
-        lst.place(relx=-SETTING_SLIDE_BACK if animated else 0, rely=0, relwidth=1, relheight=1)
+        u = self._page_u if animated else 0.0
+        lst.place(relx=-SETTING_SLIDE_BACK * u, rely=0, relwidth=1, relheight=1)
         tk.Misc.tkraise(det)
-
-        def step(k):
-            det.place_configure(relx=k)
-            lst.place_configure(relx=-SETTING_SLIDE_BACK * (1 - k))
         if animated:
-            animate(self.frame, "settings_page", SETTING_SLIDE_MS, step, lambda: det.place_forget())
+            self._slide_page(0.0, lambda: det.place_forget())
         else:
-            stop_animation(self.frame, "settings_page")
+            anim.clock_of(self.frame).stop(self.frame, "place:settings")
+            self._page_u = 0.0
             det.place_forget()
         return True
 
@@ -1062,7 +1083,8 @@ class SettingsView:
         """The list, from its top: how the page opens."""
         self.close(animated=False)
         lst = self.list_area.canvas
-        stop_animation(self.frame, "settings_page")
+        anim.clock_of(self.frame).stop(self.frame, "place:settings")
+        self._page_u = 0.0
         lst.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.detail_area.canvas.place_forget()
         self.list_area.to_top()
@@ -1219,7 +1241,8 @@ class SettingsView:
             prefs = self.app.prefs
             for buttons, now in ((self.snap_buttons, prefs.snap_gap), (self.cursor_buttons, prefs.cursor_color),
                                  (self.bin_buttons, prefs.bin_days), (self.auto_buttons, prefs.auto_layout),
-                                 (self.min_buttons, prefs.minimize_style)):
+                                 (self.min_buttons, prefs.minimize_style),
+                                 (self.motion_buttons, prefs.motion)):
                 for value, b in buttons.items():
                     chosen = value == now
                     b._bg = c.select if chosen else c.well

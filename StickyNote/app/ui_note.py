@@ -35,7 +35,7 @@ animate_ = animate                 # (minimize / restore take an ``animate`` arg
 STICKER_H = 34                  # a minimized note's sticker on the desktop (px at 100 %)
 STICKER_W = (96, 180)           # ... its width fits the title, within these (px at 100 %)
 STICKER_DRAG = 4                # ... a press that moves this far is a drag, not a click (px at 100 %)
-STICKER_FADE_MS = 140
+STICKER_FADE_MS = anim.FAST 
 
 
 class MiniSticker:
@@ -380,7 +380,7 @@ class NoteWindow:
         if pad.collapsed:                   # it was folded up when the app closed
             self._apply_collapsed()
         if fade_in:
-            animate(win, "fade", OPEN_FADE_MS, lambda k: win.attributes("-alpha", self.pad.alpha * k))
+            fade(win, "fade", 0.0, self.pad.alpha, OPEN_FADE_MS)
 
     # ---- pages -----------------------------------------------------------------
     @property
@@ -757,38 +757,36 @@ class NoteWindow:
         except tk.TclError:
             return
         half = img.resize((max(1, w0 // 2), max(1, h0 // 2)), Image.BOX)   # small frames scale from this
-        sx, sy, start = x + w0 / 2, y + h0 / 2, time.perf_counter()
+        sx, sy = x + w0 / 2, y + h0 / 2
 
-        def frame():
+        def step(t):
+            e = t * t                                       # speeds up into the bin
+            s = 1 - 0.95 * e
+            w, h = max(2, round(w0 * s)), max(2, round(h0 * s))
+            cx, cy = sx + (bx - sx) * e, sy + (by - sy) * e
+            cv._photo = ImageTk.PhotoImage((img if s > 0.5 else half).resize((w, h), Image.BILINEAR), master=cv)
+            cv.itemconfigure(pic, image=cv._photo)
+            cv.configure(width=w, height=h)
+            cv.place(x=round(cx - w / 2), y=round(cy - h / 2))
+
+        def done():
             try:
-                t = min(1.0, (time.perf_counter() - start) * 1000 / DELETE_FLY_MS)
-                e = t * t                                       # speeds up into the bin
-                s = 1 - 0.95 * e
-                w, h = max(2, round(w0 * s)), max(2, round(h0 * s))
-                cx, cy = sx + (bx - sx) * e, sy + (by - sy) * e
-                cv._photo = ImageTk.PhotoImage((img if s > 0.5 else half).resize((w, h), Image.BILINEAR), master=cv)
-                cv.itemconfigure(pic, image=cv._photo)
-                cv.configure(width=w, height=h)
-                cv.place(x=round(cx - w / 2), y=round(cy - h / 2))
-                if t < 1.0:
-                    cv.after(FRAME_MS, frame)
-                    return
                 cv.destroy()
             except tk.TclError:
                 return
             self._bin_bounce()
-        frame()
+        anim.clock_of(cv).animate(cv, "fly", DELETE_FLY_MS, step, done, ease=lambda t: t)
 
     def _bin_bounce(self):
         """The top bar's bin icon: a little bounce as a memo lands in it."""
         btn = self.btn_trash
-        base = btn.box
-        for i, f in enumerate((1.3, 1.12, 1.0)):
-            def step(f=f):
-                if btn.winfo_exists():
-                    btn.box = base * f if f != 1.0 else base
-                    btn._draw()
-            self.win.after(i * 60, step)
+        base = getattr(btn, "_rest_box", btn.box)
+        btn._rest_box = base
+
+        def step(k):
+            btn.box = base * (1 + 0.3 * math.sin(math.pi * k)) if k < 1 else base
+            btn._draw()
+        anim.clock_of(btn).animate(btn, "bounce", anim.FAST, step, ease=lambda t: t)
 
     def show_undo(self, note: Note):
         self._notice = False
@@ -1001,11 +999,11 @@ class NoteWindow:
         except tk.TclError:
             pass
 
-        def step(k):
-            for w, a in zip(wins, starts):
-                if w.winfo_exists():
-                    w.attributes("-alpha", a * (1 - k))
-        animate(self.win, "fade", CLOSE_FADE_MS, step, done)
+        clock = anim.clock_of(self.win)
+        for w, a in zip(wins, starts):          # (an exit: it speeds up as it goes, no turning back)
+            clock.tween(w, "alpha", 0.0, CLOSE_FADE_MS, read=lambda a=a: a,
+                        write=lambda v, w=w: w.winfo_exists() and w.attributes("-alpha", v),
+                        ease=anim.ease_in, frm=a, done=done if w is self.win else None)
 
     def _roll_geometry(self, h, dy=0):
         p = self.pad
@@ -1197,6 +1195,8 @@ class NoteWindow:
         stop_animation(self.win, "fade")
         stop_animation(self.win, "roll")
         stop_animation(self.win, "flash")
+        self.app.motion.window_gone(self.pad.id)    # a glide in progress: the pad keeps where it got
+        anim.clock_of(self.win).drop_owner(self.win)
         self._release()
         if self.win.winfo_exists():
             self.win.destroy()

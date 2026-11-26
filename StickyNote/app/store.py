@@ -578,6 +578,7 @@ class Prefs:
     links_migrated: bool = False    # the one-time move of older files' snapped notes to links (M2) is done
     # strong colors painted solid all the same ("Keep solid color" in Settings): no pale page for them
     solid_colors: list[str] = field(default_factory=list)
+    motion: str | None = None       # animations: "full", "reduced", "off"; None = follow Windows (anim)
     minimize_style: str = "bar"     # minimize: "bar" (folds to its top bar; folded, goes away), "fold"
                                     # (rolls away, back from the taskbar) or "sticker"
 
@@ -602,6 +603,8 @@ class Prefs:
         self.list_oldest = bool(self.list_oldest)
         if self.minimize_style not in ("fold", "bar", "sticker"):
             self.minimize_style = "bar"
+        if self.motion not in (None, "full", "reduced", "off"):
+            self.motion = None
         if self.tidy_order not in TIDY_ORDERS:
             self.tidy_order = TIDY_ORDERS[0]
         self.resize_hint_seen = bool(self.resize_hint_seen)

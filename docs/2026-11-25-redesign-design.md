@@ -627,3 +627,34 @@ Recorded 2026-11-25 with `tools/baseline.py phase1` (`docs/perf/phase1.json`), s
 | Idle 30 ms drain, 5 notes | 7 window lookups per tick | 0 note lookups (test) |
 
 Still slow, for later phases: fade/flash frames up to ~200 ms while windows are being built (Phase 2 clock; fade p95 in open_close_50 ranged 67–147 ms between runs, so it is noisy), calendar paging frames ~54 ms (Phase 5), and the 500-memo list (6 s, +45 MB, ~5,300 USER objects; Phase 5). Glide frames in open_20 stay above the display period because window creation blocks the loop (Phase 2).
+
+## Phase 2 results
+
+Recorded 2026-11-26 with `tools/baseline.py phase2` (`docs/perf/phase2.json`). Display period on this machine: **13.9 ms (71.9 Hz)**, from `DwmGetCompositionTimingInfo`. Glides are now `box` tweens on the frame clock. Frame logging counts each animation name once per tick (fixed in this phase: several windows gliding together used to log 0 ms gaps).
+
+| Glide frames (ms) | Baseline (motion p95 / max) | Phase 1 | Phase 2 (box p50 / p95 / max) |
+|---|---|---|---|
+| open_20 | 30.2 / 34.8 | 26.0 / 31.0 | 13.0 / 27.0 / 31.9 |
+| tidy (keep size) | 19.3 / 19.3 | 19.2 / 19.2 | 14.0 / 17.4 / 17.4 |
+| resize | 23.4 / 23.4 | 16.5 / 16.5 | 13.0 / 17.3 / 17.3 |
+| open_close_50 | 20.5 / 25.6 | 18.5 / 21.7 | 13.1 / 20.2 / 31.3 |
+
+**Reading these numbers:**
+- **Medians sit on the display period** (13.0–14.0 ms): frames are paced to the vblank.
+- **The p95 figures include the measuring harness.** `tools/baseline.py` sleeps 4 ms between event-loop passes, which the app's own mainloop doesn't. The tidy and resize p95 values come from only 17 samples, so p95 equals the single slowest frame.
+- **Done criterion (p95 within ±2 ms of the period):** met for glides that only move windows, allowing for the harness's 4 ms. **Not met** when many notes are *resized* at once:
+  - With a mainloop-like pump, `tidy` to a new size moves 20 frozen notes and steps at about 27–34 ms. The clock has switched to every second vblank by design (§5.1.1), because each frame's work is over half a period.
+  - That cost (resizing 20 frozen covers a frame) is Phase 4's (snapshot cache, cheaper covers).
+- **`open_20` p95 of 27 ms:** windows being built block the loop for a frame. That goes away with Phase 4's cached shots.
+- **Not real frame gaps:** `canvas:paging` max 128.7 ms, calendar `box`/`alpha` 58 ms, and `alpha` p95 102 ms in `open_close_50`. These are gaps *between* separate animations that start less than 250 ms apart, which the harness counts as intervals. Real paging frames: p50 14.6, p95 17.4.
+
+**S2 re-run (2026-11-26):** batch OK on one monitor (0 px drift). A second monitor is still untested.
+
+**Re-measured after the review fixes (2026-11-26):** this time with a mainloop-like pump (no harness sleep), on 20 open notes, 6 glides of ±120 px each:
+
+| Glide | n | p50 | p95 | max |
+|---|---|---|---|---|
+| 1 note moving | 102 | 14.0 | 14.0 | 14.1 |
+| 20 notes moving together | 103 | 14.0 | 14.0 | 14.6 |
+
+**Done criterion:** met for moving glides (p95 14.0 ms against the 13.9 ms period). Mass *resize* glides still step at every second vblank (about 28 ms); this is accepted for Phase 2 and left to Phase 4. S2 on a second monitor is still untested.

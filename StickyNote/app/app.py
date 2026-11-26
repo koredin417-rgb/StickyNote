@@ -47,6 +47,7 @@ import grid
 import holidays
 import space
 import texts
+import anim
 import gc
 import perf
 import winapi
@@ -98,6 +99,7 @@ class App:
         self._screens = None                        # the real monitors, read once (screens())
         self.store = NoteStore(folder)
         self.root = root or tk.Tk()
+        self.clock = anim.install(self.root)        # the one frame clock every animation runs on
         self.root.withdraw()
         self.root.title(APP_NAME)
         self.root.report_callback_exception = self._report_error
@@ -154,6 +156,7 @@ class App:
 
         data = self.store.load()
         self.prefs = data.prefs
+        self.apply_motion()                         # Animations: the user's choice, else Windows' setting
         Colors.keep_solid(self.prefs.solid_colors)      # Settings: strong colors painted solid all the same
         self._load_setup(data.pads)                 # N5: the copies of this screen setup (before any window)
         set_shared("BIN_DAYS", self.prefs.bin_days)     # Settings: how long the bin keeps memos
@@ -324,6 +327,20 @@ class App:
         self.request_save()
         for w in self.windows.values():
             w.apply_look()
+
+    def apply_motion(self):
+        """The clock's mode: the Animations setting, or when none was chosen, Windows' own
+        "Show animations" (off there: off here)."""
+        self.clock.mode = self.prefs.motion or ("full" if winapi.client_animations_enabled() else "off")
+
+    def set_motion(self, mode):
+        """Animations: "full", "reduced" or "off"; None goes back to following Windows."""
+        self.prefs.motion = mode if mode in ("full", "reduced", "off") else None
+        self.apply_motion()
+        self.request_save()
+        for w in self.windows.values():
+            if w.view == "settings":
+                w.settings_view.sync()
 
     def set_minimize_style(self, style):
         """Minimize folds the note away (back from the taskbar button) or leaves a sticker."""
@@ -1797,6 +1814,7 @@ class App:
             return
         try:
             self.check_screens()
+            self.apply_motion()                     # (Windows' animation setting may have changed)
         finally:
             if not self.closed:
                 self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)
@@ -2564,6 +2582,7 @@ class App:
             nw.cancel_jobs()
             if nw.calendar and nw.calendar._click_job:
                 nw.calendar.grid.after_cancel(nw.calendar._click_job)
+        self.clock.close()
         self.root.destroy()
 
     # ---- clock, second launch, errors ---------------------------------------------------
@@ -2751,11 +2770,10 @@ class App:
     def _drain_syscommands(self):
         """What the taskbar asked (winapi.hook_syscommand only appends): minimize and restore,
         animated. Two or more minimizes close together are Win+M: all at once, no animation.
-        It also runs the garbage collection Python may not run by itself (winapi.collect_garbage)."""
+        Garbage is collected by the frame clock while it is idle (anim.FrameClock._run_idle)."""
         self._sys_job = None
         if self.closed:
             return
-        winapi.collect_garbage()
         asked, self._syscommands[:] = list(self._syscommands), []
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it

@@ -17,6 +17,7 @@ from tkinter import colorchooser, filedialog, messagebox
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab, ImageTk
 
+import anim
 import holidays
 import texts
 import perf
@@ -93,38 +94,38 @@ BOX_FONT = "Segoe UI Symbol"        # draws the boxes the same in any memo font
 FINISH_TYPING_TAG = "FinishTyping"  # bind tag: a click in a text field first finishes a Korean syllable
 FORMAT_BUTTON_W = 30            # format bar buttons (px at 100 %)
 GRAB_H = 6                       # the strip along the top for moving the note
-GLIDE_MS = 220                   # a note sliding back onto the screen / detaching
+GLIDE_MS = anim.LONG             # a note sliding back onto the screen / detaching
 FRAME_MS = 15                    # one step of a slide
-FLASH_MS = 900                   # a new or reopened note's top bar fades from the theme color this long
-NEW_SLIDE_MS = 280               # a new note slides out from behind the note it was made from
+FLASH_MS = 400                   # a new or reopened note's top bar fades from the theme color this long
+NEW_SLIDE_MS = anim.LONG         # a new note slides out from behind the note it was made from
 GROUP_RING = (6, 9, 2)           # the line around notes moving together: gap, corner radius, width (px at 100 %)
 # short animations (ms): windows fade or slide; Tk cannot fade the widgets inside a window
-TIP_FADE_MS = 120                # a tooltip fades in
+TIP_FADE_MS = anim.FAST          # a tooltip fades in
 PEEK_OFFSET = (12, 18)           # a day's memo preview: down-right of the pointer (px at 100 %)
 PEEK_DROP = 10                   # ... it drops this far into place when the day changes
-PEEK_DROP_MS = 140
-ROLL_MS = 180                    # minimize: the note rolls up to its top bar
-DOCK_SLIDE_MS = 160              # ... then the bar slides down while fading
+PEEK_DROP_MS = anim.BASE 
+ROLL_MS = anim.BASE              # minimize: the note rolls up to its top bar
+DOCK_SLIDE_MS = anim.BASE        # ... then the bar slides down while fading
 SCREEN_POLL_MS = 1000            # the monitors are read this often (App.check_screens)
 SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stayed this long
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
-MENU_FADE_MS = 100               # a menu fades in
-OPEN_FADE_MS = 150               # a new or reopened note fades in (and blinks)
-CLOSE_FADE_MS = 120              # a closed note fades out
-CAL_SHOW_MS = 150                # the calendar slides out from its note and fades in (and back)
+MENU_FADE_MS = anim.FAST         # a menu fades in
+OPEN_FADE_MS = anim.FAST         # a new or reopened note fades in (and blinks)
+CLOSE_FADE_MS = anim.exit_ms(anim.FAST) # a closed note fades out
+CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
-HOVER_FADE_MS = 120              # the calendar turns solid under the mouse
-MONTH_SLIDE_MS = 280             # paging months: the shown one slides out as the next slides in
-VIEW_DIP_MS = 90                 # big <-> mini by the user's click: the calendar dips out this fast, then fades back
-DELETE_FLY_MS = 350              # a deleted memo's picture flies into the bin icon
-TOAST_RISE_MS = 150              # the Undo / notice bar rises into place ...
+HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
+MONTH_SLIDE_MS = anim.LONG       # paging months: the shown one slides out as the next slides in
+VIEW_DIP_MS = anim.FAST          # big <-> mini by the user's click: the calendar dips out this fast, then fades back
+DELETE_FLY_MS = anim.LONG        # a deleted memo's picture flies into the bin icon
+TOAST_RISE_MS = anim.BASE        # the Undo / notice bar rises into place ...
 TOAST_RISE = 10                  # ... from this far below (px at 100 %)
-HINT_DROP_MS = 150               # the first-start tips drop into place ...
+HINT_DROP_MS = anim.BASE         # the first-start tips drop into place ...
 HINT_DROP = 8                    # ... from this far above (px at 100 %)
-PICTURE_FADE_MS = 150            # the next picture (tab) fades over the last one
-CHIP_SETTLE_MS = 100             # a dropped memo title slides into its new day
-DONE_FADE_MS = 200               # a ticked to-do shows dark, then fades to its done color
+PICTURE_FADE_MS = anim.BASE      # the next picture (tab) fades over the last one
+CHIP_SETTLE_MS = anim.FAST       # a dropped memo title slides into its new day
+DONE_FADE_MS = anim.BASE         # a ticked to-do shows dark, then fades to its done color
 BIG_CELL = (100, 84)             # a day in the big month view (px at 100 %), until resized
 BIG_CELL_MIN, BIG_CELL_MAX = (64, 52), BIG_CELL     # never bigger than its default size (grip, docked or not)
 BIG_CELL_FILL = (220, 180)       # the stretch rule's "big could fill the note" test only (keeps its old hysteresis)
@@ -333,89 +334,36 @@ def _ease_out(t):
     return 1 - (1 - t) ** 3
 
 
-def _ease_out_sine(t):
-    """A soft ease out: it starts at half the cubic's speed, so a wide slide (paging months)
-    takes no big jump on its first frames."""
-    return math.sin(t * math.pi / 2)
-
-
-FINE_TIMER_IDLE_S = 0.5          # the 1 ms timer is given back this long after the last frame
-_fine_timer = {"on": False, "last": 0.0}
-
-
-def _keep_timer_fine(widget):
-    """Frames need Windows' 1 ms timer (winapi.fine_timer); it is held only while something
-    animates and given back once nothing has for FINE_TIMER_IDLE_S."""
-    ft = _fine_timer
-    ft["last"] = time.perf_counter()
-    if ft["on"]:
-        return
-    ft["on"] = winapi.fine_timer(True)
-    if not ft["on"]:
-        return
-    root = widget._root()
-
-    def check():
-        if time.perf_counter() - ft["last"] < FINE_TIMER_IDLE_S:
-            try:
-                root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-                return
-            except tk.TclError:
-                pass
-        winapi.fine_timer(False)
-        ft["on"] = False
-    root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-
-
 def animate(widget, key, ms, step, done=None, ease=_ease_out):
     """Call ``step(k)`` once a frame for ``ms`` milliseconds, k easing (``ease``, out by
-    default) from 0 to 1, then ``done()``. Frames are paced on the clock (every FRAME_MS from
-    the start, not FRAME_MS after the last one ended), so they stay even. Starting another
-    animation with the same key on the same widget replaces the running one (it stops where
-    it is). Stops quietly when the widget is gone."""
-    jobs = widget.__dict__.setdefault("_animations", {})
-    stop_animation(widget, key)
-    start = time.perf_counter()
-    _keep_timer_fine(widget)
-
-    def frame():
-        jobs.pop(key, None)
-        now = time.perf_counter()
-        if perf.ENABLED:
-            perf.perf.frame(key, now)
-        elapsed = (now - start) * 1000
-        t = 1.0 if ms <= 0 else min(1.0, elapsed / ms)
-        try:
-            step(ease(t))
-            if t < 1.0:
-                _keep_timer_fine(widget)
-                spent = (time.perf_counter() - start) * 1000
-                due = (math.floor(spent / FRAME_MS) + 1) * FRAME_MS      # the next frame on the grid
-                jobs[key] = widget.after(max(1, round(due - spent)), frame)
-                return
-        except tk.TclError:
-            return
-        if done is not None:
-            done()
-    frame()
+    default) from 0 to 1, then ``done()``: on the app's one frame clock (anim.FrameClock),
+    paced to the display. The same key on the same widget replaces the running one. Stops
+    quietly when the widget is gone."""
+    anim.clock_of(widget).animate(widget, key, ms, step, done, ease)
 
 
 def stop_animation(widget, key):
-    job = widget.__dict__.get("_animations", {}).pop(key, None)
-    if job is not None:
-        try:
-            widget.after_cancel(job)
-        except tk.TclError:
-            pass
+    try:
+        anim.clock_of(widget).stop(widget, key)
+    except tk.TclError:
+        pass
 
 
 def animating(widget, key) -> bool:
-    return key in widget.__dict__.get("_animations", {})
+    try:
+        return anim.clock_of(widget).active(widget, key)
+    except tk.TclError:
+        return False
 
 
 def fade(win, key, start, end, ms, done=None):
-    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them)."""
-    animate(win, key, ms, lambda k: win.attributes("-alpha", start + (end - start) * k), done)
+    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them). Every
+    fade of a window is one "alpha" tween (``key`` is kept for the callers but not used): a fade
+    started while another runs turns from where that one is, never jumping to ``start``."""
+    clock = anim.clock_of(win)
+    clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
+                write=lambda v: win.attributes("-alpha", v),
+                frm=None if clock.active(win, "alpha") else start, done=done)
 
 
 def _alpha(win) -> float:
@@ -1163,7 +1111,7 @@ SCROLL_W = 5                     # the scroll thumb shown while scrolling (px at
 SCROLL_W_HOVER = 8               # ... under the mouse or dragged
 SCROLL_MIN = 24                  # ... never shorter than this
 SCROLL_HIDE_MS = 900             # it fades out this long after the view last moved ...
-SCROLL_FADE_MS = 260             # ... taking this long
+SCROLL_FADE_MS = anim.LONG       # ... taking this long
 
 
 class OverlayScroll:
