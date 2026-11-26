@@ -509,6 +509,7 @@ The ⋯ menu holds layout (style), move to bin, settings and minimize, in that o
 └──────────────────────────────┘
 ```
 
+- **Head, changed by the user after Phase 3 (2026-11-26):** the month's name is left out, because the big numeral already names the month. The year sits beside the numeral on its baseline, in 13 px muted ("11 2026년" / "11 2026"), as the note's date row does.
 - **Mini view:**
   - Today's day gets a filled circle in the theme colour with white text (as now).
   - Memo dots go under the number, in the theme colour; their spacing is fixed so they never touch the number.
@@ -658,3 +659,47 @@ Recorded 2026-11-26 with `tools/baseline.py phase2` (`docs/perf/phase2.json`). D
 | 20 notes moving together | 103 | 14.0 | 14.0 | 14.6 |
 
 **Done criterion:** met for moving glides (p95 14.0 ms against the 13.9 ms period). Mass *resize* glides still step at every second vblank (about 28 ms); this is accepted for Phase 2 and left to Phase 4. S2 on a second monitor is still untested.
+
+## Phase 3 results
+
+Checked 2026-11-26 on Windows 11 (build 26300, 100 %), with `tools/look_capture.py` (scratch data folder; PNGs in `docs/perf/look-*.png`, git-ignored) and a real screen grab over a plain backdrop window for the corners.
+
+**Mockup parity (§6.1–§6.3):**
+
+| Part | Result |
+|---|---|
+| Note rail | 38 px; new memo, new window, list, calendar and pin, then ⋯ at the bottom. While typing: a short line, then bold … picture. |
+| Date row | Today's day in 22 px bold, with "11월 목요일" / "Thu, Nov" beside it on one baseline, and × on the right. |
+| Folded strip | Exactly `px(PILE_STEP)` (36 at 100 %): the day, then the memo's lines (" · ") cut to fit, and ×. |
+| List, settings, bin | ‹ back, the page's name and × in the date row; the rail stays. |
+| Calendar head | "11" in 28 px bold with the year beside it ("2026년" / "2026"), then ‹ › ⋯ ×; the month name is dropped (the user's call: the numeral names it). The this-month icon shows only on another month. |
+| Corners | DWM rounds the corners and draws its shadow on notes and the calendar (layered too). The 1 px border is used only where that fails. |
+| Smallest note (260 × 170) | Typing: new memo, new window, bold and italic stay; the rest are in ⋯. Not typing: all five nav buttons fit. |
+
+**§6.4:**
+- The dropped chip stays hidden until its flying copy lands.
+- The holiday card fades in (`fast`).
+- The other three items (flash, paging, the dip) were done in Phase 2; the flash now tints only the date row.
+
+**Calls made in this phase** (see the ledger rulings in the PR):
+- A strong (tinted) note colour keeps the colour itself on the rail, as its top bar did; the others get the 7 % mix.
+- **Memo dots** in the mini view keep each memo's own colour. §6.3 says the theme colour, but the colour is information (goal 5), and the mockup showed one colour.
+- **"Move to the bin":**
+  - it lives in ⋯, so a deleted memo now flies into ⋯;
+  - the right-click menu always lists settings, layout, move to the bin and minimize.
+- **Format buttons** follow the focus inside the note. Switching to another app or note keeps them as they were, so the rail doesn't jump on every window switch.
+- **Fonts:**
+  - no semibold face is bundled, so the small date text is Pretendard Medium;
+  - Tk can't turn on tabular digits.
+- **Resize grips** sit 3 px in from a corner that DWM rounds.
+
+**Review:** a fresh whole-branch review found 0 critical, 2 important and 5 minor issues. Graded by what a user would see, five were fixed with failing tests first (`625caa9`):
+- the rail emptied after an instant unfold;
+- the English head was too wide (later made moot by dropping the month name);
+- a back arrow was left in a folded page strip;
+- every activation of a note re-laid out its rail;
+- the right-click menu could bin a hidden memo.
+
+Two rare ones are deferred (see the PR).
+
+**Not checked:** Windows 10 (none here). The fallback path, a 1 px border with square corners, is covered by tests that force `round_corners` to fail.

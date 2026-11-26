@@ -43,7 +43,7 @@ GLYPH = {
 GLYPH["trash"] = ""                 # Delete (bin)
 GLYPH.update(bold="\ue8dd", italic="\ue8db", underline="\ue8dc", strike="\uede0",
              bullets="\ue8fd", todo="\ue73a", picture="\ueb9f")       # the format bar under the memo
-GLYPH.update(undo="\ue72c", remove="\ue711")
+GLYPH.update(undo="\ue72c", remove="\ue711", more="\ue712")     # more: the rail's \u22ef
 GLYPH.update(lock="\ue72e", unlock="\ue785", expand="\ue740", shrink="\ue73f")    # calendar header
 GLYPH.update(fold="\ue70d", unfold="\ue76c", sort="\ue8cb")     # list part heads: open / folded, sort switch
 # menus, the bin, the undo bar, empty pages (icons in place of words; the words stay in tooltips)
@@ -93,7 +93,15 @@ LINE_MARKS = (BULLET, TODO, DONE)   # all two characters long
 BOX_FONT = "Segoe UI Symbol"        # draws the boxes the same in any memo font
 FINISH_TYPING_TAG = "FinishTyping"  # bind tag: a click in a text field first finishes a Korean syllable
 FORMAT_BUTTON_W = 30            # format bar buttons (px at 100 %)
-GRAB_H = 6                       # the strip along the top for moving the note
+DATE_ROW_H = 36                  # a note's date row along its top, its edge included: the folded strip
+RAIL_W = 38                      # the rail down a note's left side, with its controls
+RAIL_BUTTON = (30, 26)           # ... its buttons (w, h)
+RAIL_PAD = 6                     # ... the room above its first button and under its ⋯
+RAIL_GAP = 9                     # ... between its nav and format buttons (a short line in the middle)
+DATE_NUM_PX = 22                 # the date row: today's day, bold (px, not pt) ...
+DATE_SMALL_PX = 13               # ... the month and weekday beside it, a folded memo's text, a page's name
+CAL_NUM_PX = 28                  # the calendar's head: the month's number, bold (px) ...
+CAL_YEAR_PX = 13                 # ... and the year beside it, on its baseline (like the note's date row)
 GLIDE_MS = anim.LONG             # a note sliding back onto the screen / detaching
 FRAME_MS = 15                    # one step of a slide
 FLASH_MS = 400                   # a new or reopened note's top bar fades from the theme color this long
@@ -135,7 +143,7 @@ PERIOD_BAND_H = 15               # a period memo's band in the big view (px at 1
 MEMO_CHIP_H = 18                 # a memo title in the big view (px at 100 %): 9 pt text
 CAL_MIN_ALPHA = 0.92             # the calendar is never more see-through than this: what is behind stays out of its text
 TOP_BUTTON_H = 28                # icon buttons in the top bar
-assert PILE_STEP == GRAB_H + TOP_BUTTON_H + 2     # geom keeps the 100 % value (it cannot import this module)
+assert PILE_STEP == DATE_ROW_H       # a folded note's height; geom keeps the 100 % value (it cannot import this module)
 TIDY_SIZES = {"small": (260, 200), "medium": (320, 280), "large": (400, 360)}   # "Tidy up" (px at 100 %)
 CASCADE_STEP = 28                # "Tidy up" on a full screen: the next layer starts this far in
 
@@ -802,6 +810,12 @@ class IconButton(tk.Canvas):
         if self.overlay:
             self.create_text(w / 2 - 1, h / 2 - 1, text=self.overlay,
                              font=(self.app.icon_font, max(5, size - 4), "bold"), fill=self._fg)
+
+    def set_ink(self, color):
+        """Draw the icon in ``color`` (a fade steps through colours: see CalendarPopup._draw_head)."""
+        if color != self._fg:
+            self._fg = self.ink_color = color
+            self._draw()
 
     def ink_box(self):
         """Where the icon's ink is, in this button's pixels: (x0, y0, x1, y1)."""

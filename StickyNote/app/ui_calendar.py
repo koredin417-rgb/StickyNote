@@ -102,12 +102,17 @@ class HolidayCard:
         x = min(max(x, left), max(left, right - w))
         y = min(max(y, top_), max(top_, bottom - h))
         top.geometry(f"+{x}+{y}")
+        appearing = not top.winfo_viewable()
+        if appearing:
+            top.attributes("-alpha", 0.0)
         top.deiconify()
         top.update_idletasks()
         if not self._through:                   # after its first map (it has a frame window then)
             winapi.set_click_through(top, True)
             self._through = bool(winapi.hwnd_of(top))
         top.lift()
+        if appearing:                           # fades in like the other pop-ups (anim.FAST)
+            fade(top, "alpha", 0.0, CLICK_THROUGH_ALPHA, anim.FAST)
 
     def hide(self):
         if self.top is not None:
@@ -176,37 +181,41 @@ class CalendarPopup:
         top.protocol("WM_DELETE_WINDOW", lambda: self.nw.close_calendar())     # Alt+F4 on the calendar
         # No top.transient(): after showing it hides the window again, and it does not
         # set a real owner for borderless windows anyway. winapi.set_owner does.
+        self.edge = 0 if winapi.can_round() else 1     # as the note's: DWM corners, else a 1 px border
+        self._rounded = False
         self.frame = tk.Frame(top, bd=0)
-        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+        self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
         self._tiles: dict = {}          # rounded day tiles (smooth, drawn with Pillow)
         self._menu_font = tkfont.Font(top, family=UI_FONT, size=9)     # PopupMenu's: for cutting titles
 
-        # like the note: a thin grab strip and a top bar one shade darker than the memo
-        self.grab = tk.Canvas(self.frame, width=1, height=px(GRAB_H), bd=0, highlightthickness=0)   # width=1:
-        self.grab.pack(fill="x")                    # a Canvas would ask for 10 cm and widen the calendar
-        self.grab.bind("<Configure>", lambda e: self._draw_grab())
+        # the head (the C look): the month's number, big, with the year beside it; then
+        # this month (only while another one shows), ‹ ›, ⋯ and ×. Dragging it moves an undocked
+        # calendar; a docked one takes its note (and the notes snapped to it) along
         head = self.head = tk.Frame(self.frame, bd=0)
         head.pack(fill="x")
+        self._num_font = tkfont.Font(top, family=UI_BOLD, size=-px(CAL_NUM_PX), weight="bold")
+        self._year_font = tkfont.Font(top, family=UI_FONT, size=-px(CAL_YEAR_PX))
+        # as wide as the widest month number and year: paging never changes the calendar's width (#17A)
+        num_w = max(self._num_font.measure(texts.month_head(2000, m)[0]) for m in range(1, 13))
+        year_w = max(self._year_font.measure(texts.month_head(y, 1)[1]) for y in range(2000, 2100))
+        self._head_w = px(6) + num_w + px(6) + year_w + px(6)
+        self.head_cv = tk.Canvas(head, width=self._head_w, height=self._head_h(), bd=0, highlightthickness=0)
+        self.head_cv.pack(side="left", padx=(px(4), 0))
 
-        def top_button(glyph, command, tip):        # the same icons, size and height as the note's top bar
+        def top_button(glyph, command, tip):        # the same icons, size and height as before
             return IconButton(head, self.app, glyph, command, tip, height=TOP_BUTTON_H)
-        self.btn_prev = top_button(GLYPH["prev"], self.prev_month, tr("tip_prev_month"))
-        self.btn_prev.pack(side="left")
-        self.title = tk.Label(head, font=(UI_FONT, 9), bd=0)     # like the note's date: plain, icon gray
-        self.title.pack(side="left", padx=px(2))
-        self.btn_next = top_button(GLYPH["next"], self.next_month, tr("tip_next_month"))
-        self.btn_next.pack(side="left")
         self.btn_close = top_button(GLYPH["close"], lambda: self.nw.close_calendar(), tr("tip_close_calendar"))
-        self.btn_close.pack(side="right")
-        self.btn_expand = top_button(GLYPH["expand"], self.toggle_expand, tr("tip_cal_expand"))
-        self.btn_expand.pack(side="right")
-        self.btn_lock = top_button(GLYPH["lock"], self.toggle_lock, tr("tip_cal_locked"))
-        self.btn_lock.pack(side="right")
-        self.btn_today = top_button(TODAY_GLYPH, self.this_month, tr("tip_today_month"))
+        self.btn_close.pack(side="right", padx=(0, px(4)))
+        self.btn_more = top_button(GLYPH["more"], self._more_menu, tr("tip_more"))
+        self.btn_more.pack(side="right")
+        self.btn_next = top_button(GLYPH["next"], self.next_month, tr("tip_next_month"))
+        self.btn_next.pack(side="right")
+        self.btn_prev = top_button(GLYPH["prev"], self.prev_month, tr("tip_prev_month"))
+        self.btn_prev.pack(side="right")
+        # always in its place (the head's width never changes): seen only while another month shows
+        self.btn_today = top_button(TODAY_GLYPH, self._today_click, tr("tip_today_month"))
         self.btn_today.pack(side="right")
-        # the top row moves an undocked calendar; a docked one takes its note (and the notes
-        # snapped to it) along
-        for w in (self.grab, head, self.title):
+        for w in (head, self.head_cv):
             w.configure(cursor="fleur")
             w.bind("<ButtonPress-1>", self._move_start)
             w.bind("<B1-Motion>", self._move_to)
@@ -697,6 +706,12 @@ class CalendarPopup:
         top.attributes("-alpha", 0.0)       # it slides out from beside its note, fading in
         top.deiconify()
         top.update_idletasks()
+        if not self._rounded:
+            self._rounded = True
+            if self.edge == 0 and not winapi.round_corners(top):
+                self.edge = 1
+                self.frame.pack_configure(padx=1, pady=1)
+                self.head_cv.configure(height=self._head_h())
         winapi.set_owner(top, self.nw.win)
         top.attributes("-topmost", self.nw.pad.pinned)
         top.lift()
@@ -704,10 +719,6 @@ class CalendarPopup:
         self._slide(opening=True)
 
     def _show_state(self):
-        self.btn_lock.set_glyph(GLYPH["lock" if self.docked else "unlock"])
-        self.btn_lock.tooltip.text = tr("tip_cal_locked" if self.docked else "tip_cal_unlocked")
-        self.btn_expand.set_glyph(GLYPH["shrink" if self.expanded else "expand"])
-        self.btn_expand.tooltip.text = tr("tip_cal_shrink" if self.expanded else "tip_cal_expand")
         self._place_grip()
 
     def _place_grip(self):
@@ -721,10 +732,11 @@ class CalendarPopup:
             grip.place_forget()
             return
         on_left = self.docked and getattr(self, "side", "right") == "left"
+        inset = 0 if self.edge else self.app.px(3)         # in from a corner DWM rounds
         if on_left:
-            grip.place(relx=0, rely=1, anchor="sw")
+            grip.place(relx=0, rely=1, anchor="sw", x=inset, y=-inset)
         else:
-            grip.place(relx=1, rely=1, anchor="se")
+            grip.place(relx=1, rely=1, anchor="se", x=-inset, y=-inset)
         if on_left != getattr(self, "_grip_left", None):
             self._grip_left = on_left
             grip.configure(cursor="size_ne_sw" if on_left else "size_nw_se")
@@ -1130,6 +1142,65 @@ class CalendarPopup:
         y, m = self.month
         self._page_to((y - 1, 12) if m == 1 else (y, m - 1))
 
+    def _today_click(self):
+        """The this-month icon: it does nothing while this month shows (it can't be seen then)."""
+        today = date.today()
+        if self.month != (today.year, today.month):
+            self.this_month()
+
+    def _more_menu(self, x=None, y=None) -> PopupMenu:
+        """The head's ⋯: this month, detach from / attach to the note, big / small view."""
+        if x is None:
+            b = self.btn_more
+            x, y = b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()
+        menu = PopupMenu(self.app, self.top)
+        menu.add(tr("menu_this_month"), self.this_month, icon=TODAY_GLYPH)
+        menu.add(tr("menu_cal_detach" if self.docked else "menu_cal_attach"), self.toggle_lock,
+                 icon=GLYPH["unlock" if self.docked else "lock"])
+        menu.add(tr("menu_cal_small" if self.expanded else "menu_cal_big"), self.toggle_expand,
+                 icon=GLYPH["shrink" if self.expanded else "expand"])
+        menu.popup(x, y)
+        return menu
+
+    def _head_h(self):
+        """As tall as the note's date row: docked side by side, the two rows line up."""
+        return self.app.px(DATE_ROW_H) - 2 * self.edge
+
+    def _draw_head(self, animated=True):
+        """The month's number, big, and the year beside it on its baseline (as the note's date
+        row: its day, then the month and weekday); the this-month icon fades in while another
+        month shows, and out on this one (anim.FAST)."""
+        cv, c, px = self.head_cv, self.colors, self.app.px
+        y, m = self.month
+        num, year = texts.month_head(y, m)
+        h = self._head_h()
+        cv.delete("all")
+        nf, yf = self._num_font, self._year_font
+        x = px(6)
+        base = round(h / 2 + 0.36 * px(CAL_NUM_PX))         # the digits' ink centred in the row
+        cv.create_text(x, base - nf.metrics("ascent"), anchor="nw", text=num, font=nf, fill=c.fg, tags=("text",))
+        x += nf.measure(num) + px(6)
+        cv.create_text(x, base - yf.metrics("ascent"), anchor="nw", text=year, font=yf, fill=c.muted, tags=("text",))
+        today = date.today()
+        away = self.month != (today.year, today.month)
+        b = self.btn_today
+        b.tooltip.text = tr("tip_today_month") if away else ""
+        b._hover = c.hover if away else c.bg
+        target = c.muted if away else c.bg
+        if b.ink_color.upper() == target.upper():
+            return
+        if not animated or not self.top.winfo_ismapped():
+            stop_animation(b, "ink")
+            b.set_ink(target)
+            return
+        start = b.ink_color
+        animate(b, "ink", anim.FAST, lambda k: b.set_ink(_mix(self.top, start, target, k)),
+                lambda: b.set_ink(target))
+
+    def head_texts(self) -> list[str]:
+        """What the head says, left to right (tests)."""
+        return [self.head_cv.itemcget(i, "text") for i in self.head_cv.find_withtag("text")]
+
     def this_month(self):
         self.hide_peek()
         self.holiday_card.hide()
@@ -1398,6 +1469,9 @@ class CalendarPopup:
             return
         old = note.date
         new = (date.fromisoformat(note.date) + timedelta(days=shift)).isoformat()
+        stop_animation(g, "settle")
+        self._end_settle()                      # (an earlier drop still settling: it lands now)
+        self._settling = note.id                # drawn hidden in its new day until the copy lands there
         self.app.move_note_date(note, new)      # redraws: the title is in its new day
         self._note().show_undo_action(tr("moved_day", day=_date_label(new)),
                                  lambda: self.app.move_note_date(note, old))
@@ -1420,7 +1494,7 @@ class CalendarPopup:
             bw, bh = w + (spot[2] - w) * k, h + (spot[3] - h) * k
             g.coords(box, x, y, x + bw, y + bh)
             g.coords(text, x + px(4), y + bh / 2)
-        animate(g, "settle", CHIP_SETTLE_MS, step, lambda: g.delete("settle"))
+        animate(g, "settle", CHIP_SETTLE_MS, step, self._end_settle)
 
     def _click(self, event):
         if self._chip_drag and self._chip_drag["moving"]:
@@ -1664,7 +1738,7 @@ class CalendarPopup:
         """Draw the month. ``keep``: a tag whose items stay (a page sliding out: _page_to)."""
         c, g, px = self.colors, self.grid, self.app.px
         y, m = self.month
-        self.title.configure(text=texts.month_title(y, m))
+        self._draw_head()
         g.delete(f"!{keep}" if keep else "all")
         if self.fit_size:                   # filling a given size: the cells for six weeks (C2)
             self._fit_cells(6)
@@ -1848,12 +1922,6 @@ class CalendarPopup:
             self._tiles[key] = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS), master=self.grid)
         return self._tiles[key]
 
-    def _draw_grab(self):
-        g, bar, px = self.grab, self.bar_colors, self.app.px
-        g.delete("all")
-        w, h = max(g.winfo_width(), self.cell_w * 7), int(g.cget("height"))
-        g.create_line(w / 2 - px(14), h / 2, w / 2 + px(14), h / 2, width=px(2), capstyle="round", fill=bar.border)
-
     def _draw_big(self, weeks, today, red):
         """The big month: a grid with each day's number, holiday name and memo titles."""
         c, g, px = self.colors, self.grid, self.app.px
@@ -1907,10 +1975,11 @@ class CalendarPopup:
                     nc = Colors.of(self.top, note.color)
                     box = (x0 + px(4), top, x0 + cw - px(4), top + chip_h)     # its left edge under the slot's
                     on = note is self._picked           # clicked (Delete bins it): a shade deeper, bold
+                    tags, state = ("chip", f"chip{note.id}"), self._chip_state(note)
                     g.create_rectangle(*box, fill=shade(self.top, nc.bg, 1) if on else nc.bg,
-                                       outline=shade(self.top, note.color, 3 if on else 2), tags=("chip",))
+                                       outline=shade(self.top, note.color, 3 if on else 2), tags=tags, state=state)
                     g.create_text(box[0] + px(4), top + chip_h / 2, anchor="w", fill=nc.fg,
-                                  font=bold_font if on else font, tags=("chip",),
+                                  font=bold_font if on else font, tags=tags, state=state,
                                   text=self._fit(memo_title(note), cw - px(14), measure))
                     self._chips.append((*box, note))
                     top += chip_h + gap
@@ -1923,13 +1992,26 @@ class CalendarPopup:
                 xb = (c1 + 1) * cw - (px(4) if ends else 0)
                 nc = Colors.of(self.top, note.color)
                 on = note is self._picked               # clicked (Delete bins it): a shade deeper, bold
+                tags, state = ("chip", "period", f"chip{note.id}"), self._chip_state(note)
                 g.create_rectangle(xa, yb, xb, yb + band_h, fill=shade(self.top, nc.bg, 1) if on else nc.bg,
-                                   outline=shade(self.top, note.color, 3 if on else 2), tags=("chip", "period"))
+                                   outline=shade(self.top, note.color, 3 if on else 2), tags=tags, state=state)
                 g.create_text(xa + px(4), yb + band_h / 2, anchor="w", fill=nc.fg,
-                              font=band_bold if on else band_font, tags=("chip", "period"),
+                              font=band_bold if on else band_font, tags=tags, state=state,
                               text=self._fit(memo_title(note), xb - xa - px(8), band_measure))
                 self._chips.append((xa, yb, xb, yb + band_h, note))
         g.configure(height=hh + ch * len(weeks))
+
+    def _chip_state(self, note):
+        """A dropped memo's title is hidden in its new day while its flying copy settles there."""
+        return "hidden" if note.id == getattr(self, "_settling", None) else "normal"
+
+    def _end_settle(self):
+        """The flying copy has landed (or another drop takes over): the title shows in its day."""
+        nid, self._settling = getattr(self, "_settling", None), None
+        g = self.grid
+        g.delete("settle")
+        if nid is not None:
+            g.itemconfigure(f"chip{nid}", state="normal")
 
     @staticmethod
     def _fit(text, width, measure):
@@ -1942,19 +2024,16 @@ class CalendarPopup:
 
     def recolor(self, c):
         self.colors = c
-        self.top.configure(bg=c.frame)
-        bar = self.bar_colors = Colors.of(self.top, c.bar, solid=True)
-        for w in (self.frame, self.grid, self.detail, self.detail_name, self.detail_text):
-            w.configure(bg=c.bg)
-        for w in (self.grab, self.head, self.title):
-            w.configure(bg=bar.bg)
-        self.title.configure(fg=bar.muted)          # every word on a top bar: the icons' gray
-        self._draw_grab()
+        self.top.configure(bg=c.frame)              # (seen only as the 1 px border: edge 1)
+        for w in (self.frame, self.grid, self.detail, self.detail_name, self.detail_text, self.head,
+                  self.head_cv):
+            w.configure(bg=c.bg)                    # the C look: the head is the page, like the note's date row
         self._draw_grip()
         self.detail_name.configure(fg=c.sunday)
         self.detail_text.configure(fg=c.fg)
-        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_close, self.btn_lock, self.btn_expand):
-            b.recolor(bar)
+        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_more, self.btn_close):
+            b.recolor(c)
+        self._draw_head(animated=False)
         self.draw()
 
     def destroy(self, animated=False):

@@ -83,8 +83,8 @@ class Driver:
 
     def group_drag(self):
         nw = self.first()
-        lbl = nw.date_label
-        x, y = lbl.winfo_rootx() + lbl.winfo_width() // 2, lbl.winfo_rooty() + lbl.winfo_height() // 2
+        row = nw.row                        # the date row: a drag handle
+        x, y = row.winfo_rootx() + row.winfo_width() // 2, row.winfo_rooty() + row.winfo_height() // 2
         group = len(self.app.group_windows(nw.pad.id))
         nw._drag_start(self.event(x, y))
         for i in range(1, 61):
