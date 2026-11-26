@@ -872,7 +872,7 @@ class NoteWindow:
         if not self._hooked:                # the taskbar's minimize / restore: the app animates them
             self._hooked = True
             winapi.disable_transitions(self.win)
-            winapi.hook_syscommand(self.win, self.app._syscommands)
+            winapi.hook_syscommand(self.win, self.app._syscommands, self.app.wake_sys)
         if not self._rounded:
             self._rounded = True
             if self.edge == 0 and not winapi.round_corners(self.win):
@@ -1015,6 +1015,9 @@ class NoteWindow:
     def bump_look(self):
         """What the note shows changed: its kept picture is no longer current (shots)."""
         self.look_version += 1
+        thumb = getattr(self.app, "thumb_soon", None)
+        if thumb is not None:
+            thumb()                         # (the taskbar preview may show it)
         shots = getattr(self.app, "shots", None)
         if shots is not None:
             shots.stale(self)

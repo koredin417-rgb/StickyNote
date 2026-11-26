@@ -21,7 +21,7 @@ from main import APP_ID, MUTEX_NAME, data_folder
 
 EXE_NAME = "StickyNote.exe"         # an earlier build ran from this (still closed before an update)
 LINK_ICON = "sticky_note.ico"       # the shortcuts' icon: a name of its own, so Windows' icon cache shows the new one
-QUIT_SIGNAL = "quit.signal"         # app.py polls for it (every 0.8 s), saves and closes
+QUIT_SIGNAL = "quit.signal"         # for an older app (it polls for it); a newer one hears "quit" on its port
 
 PARTS = ("runtime", "app", "licenses")
 LINK_NAME = "스티키 노트.lnk"
@@ -201,11 +201,13 @@ def close_running(dest: Path) -> bool:
     if answer not in ("", "y", "yes", "ㅛ", "예", "네"):
         return False
     folder = data_folder()
-    try:
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / QUIT_SIGNAL).touch()
-    except OSError:
-        pass
+    import waker
+    if not waker.send(folder / "wake.port", "quit"):     # the app saves and closes at once
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / QUIT_SIGNAL).touch()      # (an older app: it checks this file)
+        except OSError:
+            pass
     print("스티키 노트를 닫는 중…")
     if not _wait_closed(4):
         for pid in _app_processes(dest):        # an older version: it does not read quit.signal

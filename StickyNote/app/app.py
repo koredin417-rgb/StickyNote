@@ -56,6 +56,7 @@ from icon import draw_icon
 from links import Links, links_from_touching
 from motion import Motion, Outlines
 from shots import ShotCache
+from waker import Waker
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
                    PIN_LIMIT_MAX, SNAP_GAPS, SOLID_COLORS, STYLES, TIDY_ORDERS, Note, NoteStore, Pad, Prefs)
 from texts import tr
@@ -145,6 +146,14 @@ class App:
         self._taken = None                          # (the monitors the app has taken in, their key)
         self._seen = None                           # (what the last poll read, when it first read it)
         self._syscommands: list = []                # what the taskbar asked the notes (hooks only append)
+        # the event loop wakes on events, not polls: the hooks, a second launch and the installer ping
+        port_file = Path(folder) / "wake.port"      # (each data folder its own: the preview's apart)
+        self.waker = Waker(self.root, {"sys": self._drain_syscommands, "screens": self._screens_event,
+                                       "day": self._day_event, "show": self._show_all,
+                                       "quit": self.quit}, port_file)
+        self.waker._connect()                       # (now: a hook's ping must never wait for a connection)
+        self.wake_sys = lambda: self.waker.ping("sys")
+        self._sys_job = self._thumb_job = None
         self._pictures: OrderedDict = OrderedDict()
         self._recently_closed: list = []        # (time, pad) of notes closed while others stay open
         self._keep_pads: list = []              # those to bring back at the next start
@@ -200,17 +209,17 @@ class App:
             self.hold_links(True)
         self._start_up()                            # (every window is in self.windows now)
         self.save_now()
-        self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)
+        self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)    # (a safety net: "screens")
         if not self.prefs.hints_seen:               # once: the controls that are easy to miss
             first = next(iter(self.windows.values()))
             self.root.after(300, lambda: first.win.winfo_exists() and first.show_hints())
 
-        self._day_job = self.root.after(DAY_CHECK_MS, self._check_day)
-        self._sys_job = self.root.after(30, self._drain_syscommands)
+        self._day_job = None
+        self._arm_day()
         self.arrange_soon()                         # auto layout: tiled from the start
         if signal_file is not None:
             self._clear_signal()
-            self._poll_job = self.root.after(SIGNAL_POLL_MS, self._poll_signal)
+            self._poll_job = self.root.after(SIGNAL_POLL_MS, self._poll_signal)    # (older launchers' files)
 
     # ---- helpers ---------------------------------------------------------------------
     def _apply_ui_font(self, families):
@@ -1089,8 +1098,11 @@ class App:
 
     def space_changed(self):
         """Something that takes up space came, went, moved, changed size or changed state:
-        the next space() builds the list again."""
+        the next space() builds the list again (and the taskbar preview is looked at)."""
         self._space_epoch += 1
+        thumb = getattr(self, "thumb_soon", None)
+        if thumb is not None:
+            thumb()
 
     def space(self, exclude=()) -> list[space.Shape]:
         """S1, every shape that takes up space, each where it is going (at its destination
@@ -1817,8 +1829,18 @@ class App:
             self.check_screens()
             self.apply_motion()                     # (Windows' animation setting may have changed)
         finally:
-            if not self.closed:
-                self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)
+            if not self.closed:                     # (a change settling: looked at again soon)
+                ms = SCREEN_SETTLE_POLL_MS if self.screens_pending else SCREEN_POLL_MS
+                self._screen_job = self.root.after(ms, self._poll_screens)
+
+    def _screens_event(self) -> None:
+        """The monitors, the work area, the DPI or a setting changed (WM_DISPLAYCHANGE...): looked at now."""
+        if self.closed:
+            return
+        if self._screen_job is not None:
+            self.root.after_cancel(self._screen_job)
+            self._screen_job = None
+        self._poll_screens()
 
     def set_note_size(self, nw: NoteWindow):
         """Menu "Use this size for new notes" (again: back to "like the note it came from")."""
@@ -2574,9 +2596,11 @@ class App:
         except Exception:                   # logged; a failed save must not keep the process alive
             self._report_error(*sys.exc_info())
         self.closed = True
-        for job in (self._poll_job, self._day_job, getattr(self, "_sys_job", None), self._screen_job):
+        for job in (self._poll_job, self._day_job, getattr(self, "_sys_job", None), self._screen_job,
+                    getattr(self, "_thumb_job", None)):
             if job is not None:
                 self.root.after_cancel(job)
+        self.waker.close()
         for nw in self.windows.values():
             nw.cancel_jobs()
             if nw.calendar and nw.calendar._click_job:
@@ -2585,7 +2609,50 @@ class App:
         self.root.destroy()
 
     # ---- clock, second launch, errors ---------------------------------------------------
+    def _arm_day(self) -> None:
+        """The date is looked at next at midnight (and when the clock changes or the computer wakes: "day")."""
+        if self._day_job is not None:
+            self.root.after_cancel(self._day_job)
+        now = datetime.now()
+        midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+        wait = (midnight - now).total_seconds() + 1
+        self._day_due = time.monotonic() + wait
+        self._day_job = self.root.after(max(1000, round(wait * 1000)), self._check_day)
+
+    def _day_event(self) -> None:
+        if not self.closed:
+            self._check_day()
+
+    def _show_all(self) -> None:
+        """A second launch asks: every note comes forward."""
+        for nw in self.windows.values():
+            nw.show(focus=False)
+
+    def thumb_soon(self) -> None:
+        """Something the taskbar preview shows changed: checked once, half a second from now."""
+        if self._thumb_job is None and not self.closed:
+            try:
+                self._thumb_job = self.root.after(500, self._thumb_due)
+            except tk.TclError:
+                pass
+
+    def _thumb_due(self) -> None:
+        self._thumb_job = None
+        self._thumb_at = 0.0
+        self._check_thumbnail()
+
+    def _rearm_timers(self) -> None:
+        """The repeating timers armed again (a test counts the wakeups of an idle app)."""
+        for name, ms, fn in (("_screen_job", SCREEN_POLL_MS, self._poll_screens),
+                             ("_poll_job", SIGNAL_POLL_MS, self._poll_signal)):
+            job = getattr(self, name, None)
+            if job is not None:
+                self.root.after_cancel(job)
+                setattr(self, name, self.root.after(ms, fn))
+        self._arm_day()
+
     def _check_day(self):
+        self._day_job = None
         try:
             if date.today() != self._today:
                 self._today = date.today()
@@ -2597,7 +2664,8 @@ class App:
                     self.save_now()
         except Exception:                   # logged; the next day must still be checked
             self._report_error(*sys.exc_info())
-        self._day_job = self.root.after(DAY_CHECK_MS, self._check_day)
+        if not self.closed:
+            self._arm_day()
 
     def _clear_signal(self):
         try:
@@ -2622,7 +2690,7 @@ class App:
             p.withdraw()
             p.deiconify()
         winapi.disable_transitions(p)
-        winapi.hook_syscommand(p, self._syscommands)
+        winapi.hook_syscommand(p, self._syscommands, self.wake_sys)
         winapi.use_iconic_thumbnail(p)              # its preview: the notes as they lie (_send_thumbnail)
         self._thumb_sig = None
         self._proxy_ready = False                   # (its own first showing is no click)
@@ -2718,7 +2786,7 @@ class App:
             return
         self._thumb_at = now
         sig = tuple((nw.pad.x, nw.pad.y, nw.pad.width, nw.pad.height, nw.minimized, nw.view, nw.note.id,
-                     nw.note.modified, nw.calendar is not None, nw.pad.collapsed) for nw in self.windows.values())
+                     nw.look_version, nw.calendar is not None, nw.pad.collapsed) for nw in self.windows.values())
         if sig != self._thumb_sig:
             self._thumb_sig = sig
             winapi.invalidate_iconic(self.proxy)
@@ -2774,6 +2842,12 @@ class App:
         if self.closed:
             return
         asked, self._syscommands[:] = list(self._syscommands), []
+        words = {e[0] for e in asked}
+        asked = [e for e in asked if e[0] in ("min", "restore", "thumb")]
+        if "screens" in words:
+            self._screens_event()
+        if "day" in words:
+            self._day_event()
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it
             winapi.restore(self.proxy, raw=True)
@@ -2783,7 +2857,6 @@ class App:
         mins = [e for e in asked if e[0] == "min"]
         multi = len(mins) >= 2 and mins[-1][2] - mins[0][2] <= MULTI_MIN_MS / 1000
         try:
-            self._check_thumbnail()
             for what, hwnd, _t in asked:
                 if hwnd == proxy:
                     if what == "thumb":
@@ -2800,7 +2873,6 @@ class App:
                     nw.restore()
         except Exception:
             self._report_error(*sys.exc_info())
-        self._sys_job = self.root.after(30, self._drain_syscommands)
 
     def _poll_signal(self):  # (show.signal: come forward; quit.signal: close)
         quit_file = self.signal_file.with_name(QUIT_SIGNAL)
