@@ -46,6 +46,7 @@ import geom
 import grid
 import holidays
 import space
+import store as _store
 import texts
 import anim
 import gc
@@ -2542,6 +2543,7 @@ class App:
     def request_save(self):
         if self.closed:
             return
+        self._dirty = True
         if self._save_job is not None:
             self.root.after_cancel(self._save_job)
         self._save_job = self.root.after(SAVE_DELAY_MS, self._autosave)
@@ -2560,7 +2562,16 @@ class App:
                     w.calendar.draw()
 
     @perf.timed("save")
-    def save_now(self):
+    def save_now(self, force: bool = False):
+        """Write the notes, the windows and the settings. Nothing to do (no attribute set since
+        the last save, no save asked for, no typing waiting to be read): it returns at once.
+        ``force``: everything is read and compared anyway (at exit: a list changed in place)."""
+        if (not force and not getattr(self, "_dirty", True) and _store.edits == getattr(self, "_saved_edits", -1)
+                and not any("sync" in nw._jobs for nw in self.windows.values())):
+            if self._save_job is not None:
+                self.root.after_cancel(self._save_job)
+                self._save_job = None
+            return
         for nw in self.windows.values():
             if not nw.win.winfo_exists():
                 # destroyed but still listed (a bug elsewhere, as set_language's on 2026-11-21):
@@ -2584,7 +2595,8 @@ class App:
         try:
             self.store.save(list(self.notes.values()), [w.pad for w in self.windows.values()] + self._keep_pads,
                             self.prefs)
-        except OSError as exc:
+            self._dirty, self._saved_edits = False, _store.edits
+        except OSError as exc:              # (still dirty: the next save tries again)
             self._log(f"save failed: {exc!r}")
 
     def quit(self):
@@ -2592,7 +2604,7 @@ class App:
             return
         PopupMenu.close_current()
         try:
-            self.save_now()
+            self.save_now(force=True)
         except Exception:                   # logged; a failed save must not keep the process alive
             self._report_error(*sys.exc_info())
         self.closed = True
