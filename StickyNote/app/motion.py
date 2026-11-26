@@ -2,7 +2,7 @@
 
 An action works out its final boxes once and hands them to ``Motion.run`` (through
 ``App.apply`` / ``App.apply_plan``). Every changed window, the notes and the calendar, then
-glides there once, all on one shared clock: a single ``root.after(FRAME_MS)`` loop, eased out.
+glides there once, all on the app's one frame clock (anim.FrameClock): a "box" tween per window.
 A note whose size changes is frozen (a still picture stands in: NoteWindow.freeze) and thawed
 when it gets there. The end-of-action hooks (settle_links, request_save, ``done``) run once,
 when the last window has landed.
@@ -16,19 +16,17 @@ window that takes no space).
 """
 from __future__ import annotations
 
-import math
 import time
 import tkinter as tk
 
-import perf
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import (FRAME_MS, GLIDE_MS, TIP_KEY, _ease_out, _keep_timer_fine, accent_color, animating,
-                       stop_animation)
+from ui_common import GLIDE_MS, TIP_KEY, _alpha, accent_color, animating, stop_animation
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
 CLICK_THROUGH_ALPHA = 0.999
+CROSSFADE_MS = 60               # Animations: Reduced: a moving window fades out this fast, jumps, fades back
 
 
 def _size(b):
@@ -45,14 +43,6 @@ def _sweeps_over(start, end, note_start, note_end) -> bool:
         if x < n[2] - 1 and n[0] + 1 < x + w and y < n[3] - 1 and n[1] + 1 < y + h:
             return True
     return False
-
-
-def next_delay(t0: float, now: float, frame_ms: int = FRAME_MS) -> int:
-    """Milliseconds from ``now`` to the next frame on the grid t0 + k * frame_ms (seconds in,
-    ms out), at least 1: frames stay on the clock instead of drifting by each frame's work."""
-    spent = (now - t0) * 1000
-    due = (math.floor(spent / frame_ms) + 1) * frame_ms
-    return max(1, round(due - spent))
 
 
 def _lerp(a, b, k):
@@ -75,17 +65,17 @@ class Motion:
     def __init__(self, app):
         self.app = app
         self._items: dict[str, _Item] = {}      # what is gliding, by id (a later plan's item replaces it)
-        self._job = None                        # the one after() loop
         self._dones: list = []                  # the done() of every plan since the last end, in order
-        self._clock0: float | None = None       # when the running loop started (its frames' grid)
+        self._arrived: list = []                # items whose glide got there, landed at the next frame
+        self._fading: dict = {}                 # id -> item cross-fading (Animations: Reduced)
 
     # ---- asking ------------------------------------------------------------------------
     def busy(self) -> bool:
         return bool(self._items)
 
     def loops(self) -> int:
-        """How many after() loops are running: 0 or 1."""
-        return 0 if self._job is None else 1
+        """1 while glides run (on the app's frame clock), else 0."""
+        return 1 if self._items else 0
 
     def drives(self, pid) -> bool:
         """``pid`` (a pad id or CAL) is in the running plan."""
@@ -225,6 +215,7 @@ class Motion:
                 superseded.add(pid)
             if start == end and not (pid == CAL and sized):
                 if old is not None:             # stopped right where it now goes
+                    self._stop_glide(pid)
                     self._land(pid, end, old.sized, old.pad)
                 elif pid != CAL:                # there already (its pad may say otherwise: starts)
                     self._settle(app.windows[pid].pad, end)
@@ -243,30 +234,119 @@ class Motion:
         if done is not None:
             self._dones.append(done)
         if not self._items:                     # nothing (left) to move: the action ends here
-            if self._job is not None:
-                app.root.after_cancel(self._job)
-                self._job = None
             self._end()
             return
-        if self._job is None:
-            self._clock0 = time.perf_counter()
-            self._job = app.root.after(FRAME_MS, self._tick)
-        _keep_timer_fine(app.root)              # frames need Windows' 1 ms timer (else 16 or 31 ms apart)
         for item in new:                        # last: drawing may run idle tasks (and a plan in them)
             if item.id == CAL and item.sized and self._items.get(CAL) is item:
                 self._resize_calendar(item)
-        t0 = time.perf_counter()                # the clock starts once all are ready (freezing a dozen
-        for item in new:                        # notes can take as long as the glide itself)
-            item.t0 = t0
+        for item in sorted(new, key=lambda i: i.id == CAL):    # the glides start once all are ready
+            if self._items.get(item.id) is item:                # (freezing a dozen notes takes a while)
+                self._glide(item)
+
+    def _window(self, pid):
+        if pid == CAL:
+            cal = self._calendar()
+            return None if cal is None else cal.top
+        nw = self._note(pid)
+        return None if nw is None else nw.win
+
+    def _glide(self, item):
+        """The item's frames, on the app's frame clock: a "box" tween of its window. One already
+        gliding (an earlier plan) turns toward the new box from where it is, at its speed."""
+        win = self._window(item.id)
+        if win is None:
+            return
+        cal = self._calendar() if item.id == CAL else None
+        if self.app.clock.mode == "reduced":    # Animations: Reduced: it fades out, jumps, fades in
+            self._crossfade(item, win, cal)
+            return
+
+        def extra(b, item=item):
+            item.now = b
+            if cal is not None:
+                cal._xy = (b[0], b[1])
+        self.app.clock.glide(win, item.end, item.ms, frm=item.start, sized=item.sized and item.id != CAL,
+                             write_extra=extra, done=lambda item=item: self._got_there(item))
+
+    def _crossfade(self, item, win, cal):
+        """Animations: Reduced: the window fades out, jumps to its box, fades back. It runs on the
+        window's own "box" key, like a glide (a cancel, a finish or a later plan stops it the same
+        way, and puts the window's opacity back); the opacity is written here, not by a fade."""
+        clock = self.app.clock
+        clock.stop(win, "alpha")
+        a0, jumped = _alpha(win), [False]
+        self._fading[item.id] = item
+
+        def step(k):
+            if k < 0.5:
+                win.attributes("-alpha", a0 * (1 - 2 * k))
+                return
+            if not jumped[0]:
+                jumped[0] = True
+                self._show(item, 1.0)
+            win.attributes("-alpha", self._alpha_back(item.id, item) * (2 * k - 1))
+
+        def done():
+            self._fading.pop(item.id, None)
+            self._got_there(item)
+        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t)
+
+    def _alpha_back(self, pid, item):
+        if pid == CAL:
+            cal = self._calendar()
+            return cal._target_alpha() if cal is not None else 1.0
+        return item.pad.alpha if item.pad is not None else 1.0
+
+    def fading(self, pid) -> bool:
+        """``pid`` is cross-fading (Animations: Reduced): its opacity is the cross-fade's."""
+        return pid in self._fading
+
+    def _stop_glide(self, pid):
+        win = self._window(pid)
+        if win is not None:
+            self.app.clock.stop(win, "box")
+        item = self._fading.pop(pid, None)
+        if item is not None and win is not None:    # stopped mid cross-fade: as see-through as it should be
+            try:
+                win.attributes("-alpha", self._alpha_back(pid, item))
+            except tk.TclError:
+                pass
+
+    def _got_there(self, item):
+        """A glide's last frame: it lands at the start of the next frame, with the others that
+        got there (notes first, so the calendar's offset is from its note's final box)."""
+        if self._items.get(item.id) is item:
+            self._arrived.append(item)
+            self.app.clock.request(self._land_arrived)
+
+    def _land_arrived(self):
+        arrived, self._arrived = self._arrived, []
+        landed = []
+        for item in arrived:
+            if self._items.get(item.id) is item:
+                del self._items[item.id]
+                landed.append(item)
+        self._land_all(landed)
+        if landed and not self._items:          # (nothing landed: whoever stopped them ends the action)
+            self._end()
+
+    def window_gone(self, pid):
+        """``pid``'s window is closing: its glide stops; the pad keeps where it got. The action's
+        end step runs if nothing else moves."""
+        item = self._items.pop(pid, None)
+        if item is None:
+            return
+        self._stop_glide(pid)
+        self._land(pid, item.now, False, item.pad)
+        if not self._items:
+            self._end()
 
     def _begin(self, item, superseded, jump):
         """An item's first step: its destination is known at once (S1), a note whose size
         changes is frozen, and one taken over from an earlier plan that keeps its size is thawed."""
         if item.id == CAL:
             cal = self._calendar()
-            if animating(cal.top, "slide"):     # still sliding out: the glide takes it from here
-                stop_animation(cal.top, "slide")
-                cal.apply_alpha(animated=False)
+            # (still sliding out: the glide is the same "box" tween, so it turns from there)
             cal.target_box = item.end
             if cal.docked:                      # (follow_note keeps it beside its note's destination)
                 nx, ny = pad_box(cal.nw.pad)[:2]
@@ -332,31 +412,6 @@ class Motion:
         item.now = b
         return True
 
-    def _tick(self):
-        """One frame for every item, on the one clock; those that got there land."""
-        self._job = None
-        now, landed = time.perf_counter(), []
-        if perf.ENABLED:
-            perf.perf.frame("motion", now)
-        for item in list(self._items.values()):
-            t = 1.0 if item.ms <= 0 else min(1.0, (now - item.t0) * 1000 / item.ms)
-            if not self._show(item, _ease_out(t)):
-                self._items.pop(item.id, None)  # its window went away (closed): the pad keeps where it got
-                self._land(item.id, item.now, False, item.pad)
-            elif t >= 1.0:
-                landed.append(item)
-        for item in landed:
-            if self._items.get(item.id) is item:
-                del self._items[item.id]
-        self._land_all(landed)
-        if self._items:
-            if self._job is None:
-                self._job = self.app.root.after(next_delay(self._clock0, time.perf_counter()), self._tick)
-                _keep_timer_fine(self.app.root)
-        else:
-            self._clock0 = None
-            self._end()
-
     def _land_all(self, items):
         for item in sorted(items, key=lambda i: i.id == CAL):  # notes first: the calendar's offset is from its note
             if item.id not in self._items:      # (a plan started meanwhile has it now: that one lands it)
@@ -388,7 +443,7 @@ class Motion:
     def _end(self):
         """The end of the action, once nothing moves: links settle (M2), it is saved, then each
         plan's done(), in the order they were run. Never at a superseded plan's in-between boxes."""
-        if self._items or self._job is not None:
+        if self._items:
             return                              # (a plan started while the last ones landed)
         dones, self._dones = self._dones, []
         self.app.settle_links()
@@ -410,11 +465,9 @@ class Motion:
         if not stopped:
             return
         for item in sorted(stopped, key=lambda i: i.id == CAL):
+            self._stop_glide(item.id)
             self._land(item.id, item.now, item.sized, item.pad)
         if not self._items:
-            if self._job is not None:
-                self.app.root.after_cancel(self._job)
-                self._job = None
             self._dones = []
 
     def finish(self) -> None:
@@ -422,11 +475,10 @@ class Motion:
         items = list(self._items.values())
         if not items and not self._dones:
             return
-        if self._job is not None:
-            self.app.root.after_cancel(self._job)
-            self._job = None
         self._items.clear()
+        self._arrived = []
         for item in items:
+            self._stop_glide(item.id)
             self._show(item, 1.0)
         self._land_all(items)
         self._end()
@@ -477,6 +529,7 @@ class Outlines:
 
     def hide(self) -> None:
         try:
-            self.top.withdraw()
+            if self.top.state() != "withdrawn":     # (asked at every frame of a live resize)
+                self.top.withdraw()
         except tk.TclError:
             pass

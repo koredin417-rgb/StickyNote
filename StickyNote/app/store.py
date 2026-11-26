@@ -250,8 +250,22 @@ def _clean_scales(value) -> dict:
     return out
 
 
+edits = 0       # bumped by every attribute set on a Note, Pad or Prefs: a save with none since does nothing
+
+
+class _Tracked:
+    """Every attribute set counts as an edit (``edits``). (A list or dict changed in place is not
+    counted: App.request_save marks those, and the save at exit always checks everything.)"""
+    __slots__ = ()
+
+    def __setattr__(self, name, value):
+        global edits
+        edits += 1
+        object.__setattr__(self, name, value)
+
+
 @dataclass
-class Note:
+class Note(_Tracked):
     id: str = field(default_factory=_new_id)
     style: str = "plain"            # one of STYLES
     header: str = ""
@@ -461,7 +475,7 @@ class Note:
 
 
 @dataclass
-class Pad:
+class Pad(_Tracked):
     id: str = field(default_factory=_new_id)
     note_id: str | None = None
     x: int | None = None            # None = let the app choose
@@ -548,7 +562,7 @@ class Pad:
 
 
 @dataclass
-class Prefs:
+class Prefs(_Tracked):
     last_style: str = "plain"       # layout for new memos: the one chosen last
     language: str = texts.DEFAULT   # "ko" or "en"
     default_color: str | None = None    # color of new memos (#RRGGBB); None = not chosen yet
@@ -578,6 +592,7 @@ class Prefs:
     links_migrated: bool = False    # the one-time move of older files' snapped notes to links (M2) is done
     # strong colors painted solid all the same ("Keep solid color" in Settings): no pale page for them
     solid_colors: list[str] = field(default_factory=list)
+    motion: str | None = None       # animations: "full", "reduced", "off"; None = follow Windows (anim)
     minimize_style: str = "bar"     # minimize: "bar" (folds to its top bar; folded, goes away), "fold"
                                     # (rolls away, back from the taskbar) or "sticker"
 
@@ -602,6 +617,8 @@ class Prefs:
         self.list_oldest = bool(self.list_oldest)
         if self.minimize_style not in ("fold", "bar", "sticker"):
             self.minimize_style = "bar"
+        if self.motion not in (None, "full", "reduced", "off"):
+            self.motion = None
         if self.tidy_order not in TIDY_ORDERS:
             self.tidy_order = TIDY_ORDERS[0]
         self.resize_hint_seen = bool(self.resize_hint_seen)
@@ -701,12 +718,15 @@ class NoteStore:
                               "notes": [asdict(n) for n in notes],
                               "pads": [asdict(p) for p in pads],
                               "prefs": asdict(prefs or Prefs())},
-                             ensure_ascii=False, indent=1)
+                             ensure_ascii=False, separators=(",", ":"))      # (compact: loading takes both)
         if payload == self._written and self.path.exists():
             self._daily_backup(payload)         # nothing changed since the last save
             return
         tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(payload, "utf-8")
+        with open(tmp, "w", encoding="utf-8") as f:     # on the disk before it replaces the file
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
         # the current file becomes the backup if it is good: known good when this app wrote it,
         # otherwise (the first save) read to check. One that can't be read is not replaced before
         # a copy of it is kept (if that fails, the OSError stops the save and the file stays).

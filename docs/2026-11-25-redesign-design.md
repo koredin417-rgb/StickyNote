@@ -509,6 +509,7 @@ The ⋯ menu holds layout (style), move to bin, settings and minimize, in that o
 └──────────────────────────────┘
 ```
 
+- **Head, changed by the user after Phase 3 (2026-11-26):** the month's name is left out, because the big numeral already names the month. The year sits beside the numeral on its baseline, in 13 px muted ("11 2026년" / "11 2026"), as the note's date row does.
 - **Mini view:**
   - Today's day gets a filled circle in the theme colour with white text (as now).
   - Memo dots go under the number, in the theme colour; their spacing is fixed so they never touch the number.
@@ -627,3 +628,252 @@ Recorded 2026-11-25 with `tools/baseline.py phase1` (`docs/perf/phase1.json`), s
 | Idle 30 ms drain, 5 notes | 7 window lookups per tick | 0 note lookups (test) |
 
 Still slow, for later phases: fade/flash frames up to ~200 ms while windows are being built (Phase 2 clock; fade p95 in open_close_50 ranged 67–147 ms between runs, so it is noisy), calendar paging frames ~54 ms (Phase 5), and the 500-memo list (6 s, +45 MB, ~5,300 USER objects; Phase 5). Glide frames in open_20 stay above the display period because window creation blocks the loop (Phase 2).
+
+## Phase 2 results
+
+Recorded 2026-11-26 with `tools/baseline.py phase2` (`docs/perf/phase2.json`). Display period on this machine: **13.9 ms (71.9 Hz)**, from `DwmGetCompositionTimingInfo`. Glides are now `box` tweens on the frame clock. Frame logging counts each animation name once per tick (fixed in this phase: several windows gliding together used to log 0 ms gaps).
+
+| Glide frames (ms) | Baseline (motion p95 / max) | Phase 1 | Phase 2 (box p50 / p95 / max) |
+|---|---|---|---|
+| open_20 | 30.2 / 34.8 | 26.0 / 31.0 | 13.0 / 27.0 / 31.9 |
+| tidy (keep size) | 19.3 / 19.3 | 19.2 / 19.2 | 14.0 / 17.4 / 17.4 |
+| resize | 23.4 / 23.4 | 16.5 / 16.5 | 13.0 / 17.3 / 17.3 |
+| open_close_50 | 20.5 / 25.6 | 18.5 / 21.7 | 13.1 / 20.2 / 31.3 |
+
+**Reading these numbers:**
+- **Medians sit on the display period** (13.0–14.0 ms): frames are paced to the vblank.
+- **The p95 figures include the measuring harness.** `tools/baseline.py` sleeps 4 ms between event-loop passes, which the app's own mainloop doesn't. The tidy and resize p95 values come from only 17 samples, so p95 equals the single slowest frame.
+- **Done criterion (p95 within ±2 ms of the period):** met for glides that only move windows, allowing for the harness's 4 ms. **Not met** when many notes are *resized* at once:
+  - With a mainloop-like pump, `tidy` to a new size moves 20 frozen notes and steps at about 27–34 ms. The clock has switched to every second vblank by design (§5.1.1), because each frame's work is over half a period.
+  - That cost (resizing 20 frozen covers a frame) is Phase 4's (snapshot cache, cheaper covers).
+- **`open_20` p95 of 27 ms:** windows being built block the loop for a frame. That goes away with Phase 4's cached shots.
+- **Not real frame gaps:** `canvas:paging` max 128.7 ms, calendar `box`/`alpha` 58 ms, and `alpha` p95 102 ms in `open_close_50`. These are gaps *between* separate animations that start less than 250 ms apart, which the harness counts as intervals. Real paging frames: p50 14.6, p95 17.4.
+
+**S2 re-run (2026-11-26):** batch OK on one monitor (0 px drift). A second monitor is still untested.
+
+**Re-measured after the review fixes (2026-11-26):** this time with a mainloop-like pump (no harness sleep), on 20 open notes, 6 glides of ±120 px each:
+
+| Glide | n | p50 | p95 | max |
+|---|---|---|---|---|
+| 1 note moving | 102 | 14.0 | 14.0 | 14.1 |
+| 20 notes moving together | 103 | 14.0 | 14.0 | 14.6 |
+
+**Done criterion:** met for moving glides (p95 14.0 ms against the 13.9 ms period). Mass *resize* glides still step at every second vblank (about 28 ms); this is accepted for Phase 2 and left to Phase 4. S2 on a second monitor is still untested.
+
+## Phase 3 results
+
+Checked 2026-11-26 on Windows 11 (build 26300, 100 %), with `tools/look_capture.py` (scratch data folder; PNGs in `docs/perf/look-*.png`, git-ignored) and a real screen grab over a plain backdrop window for the corners.
+
+**Mockup parity (§6.1–§6.3):**
+
+| Part | Result |
+|---|---|
+| Note rail | 38 px; new memo, new window, list, calendar and pin, then ⋯ at the bottom. While typing: a short line, then bold … picture. |
+| Date row | Today's day in 22 px bold, with "11월 목요일" / "Thu, Nov" beside it on one baseline, and × on the right. |
+| Folded strip | Exactly `px(PILE_STEP)` (36 at 100 %): the day, then the memo's lines (" · ") cut to fit, and ×. |
+| List, settings, bin | ‹ back, the page's name and × in the date row; the rail stays. |
+| Calendar head | "11" in 28 px bold with the year beside it ("2026년" / "2026"), then ‹ › ⋯ ×; the month name is dropped (the user's call: the numeral names it). The this-month icon shows only on another month. |
+| Corners | DWM rounds the corners and draws its shadow on notes and the calendar (layered too). The 1 px border is used only where that fails. |
+| Smallest note (260 × 170) | Typing: new memo, new window, bold and italic stay; the rest are in ⋯. Not typing: all five nav buttons fit. |
+
+**§6.4:**
+- The dropped chip stays hidden until its flying copy lands.
+- The holiday card fades in (`fast`).
+- The other three items (flash, paging, the dip) were done in Phase 2; the flash now tints only the date row.
+
+**Calls made in this phase** (see the ledger rulings in the PR):
+- A strong (tinted) note colour keeps the colour itself on the rail, as its top bar did; the others get the 7 % mix.
+- **Memo dots** in the mini view keep each memo's own colour. §6.3 says the theme colour, but the colour is information (goal 5), and the mockup showed one colour.
+- **"Move to the bin":**
+  - it lives in ⋯, so a deleted memo now flies into ⋯;
+  - the right-click menu always lists settings, layout, move to the bin and minimize.
+- **Format buttons** follow the focus inside the note. Switching to another app or note keeps them as they were, so the rail doesn't jump on every window switch.
+- **Fonts:**
+  - no semibold face is bundled, so the small date text is Pretendard Medium;
+  - Tk can't turn on tabular digits.
+- **Resize grips** sit 3 px in from a corner that DWM rounds.
+
+**Review:** a fresh whole-branch review found 0 critical, 2 important and 5 minor issues. Graded by what a user would see, five were fixed with failing tests first (`625caa9`):
+- the rail emptied after an instant unfold;
+- the English head was too wide (later made moot by dropping the month name);
+- a back arrow was left in a folded page strip;
+- every activation of a note re-laid out its rail;
+- the right-click menu could bin a hidden memo.
+
+Two rare ones are deferred (see the PR).
+
+**Not checked:** Windows 10 (none here). The fallback path, a 1 px border with square corners, is covered by tests that force `round_corners` to fail.
+
+## Phase 4 results
+
+**How it was measured.** Recorded 2026-11-26 with `tools/interact_bench.py`:
+- Phase 3 code: `docs/perf/phase4-before.json`.
+- Phase 4 code: `docs/perf/phase4.json`.
+- Each gesture runs on 20 fresh notes, made from each other so they are linked; the group is 16 notes.
+- Every display frame gets 8 mouse moves through Tk's real bindings, as from a 500–1000 Hz mouse.
+- Figures are the main thread's work per frame. The display period is **13.9 ms**, so 2× is 27.8 ms.
+
+| Gesture | Before: p50 / p95 / max (ms) | After: p50 / p95 / max (ms) | Frames over 2× the period, before → after |
+|---|---|---|---|
+| Group drag | 14.3 / 19.8 / 21.3 | 4.9 / 5.4 / 5.8 | 0 → 0 (over 1×: 41 → 0) |
+| Single-note resize (live plan) | 14.9 / 18.6 / 24.0 | 13.5 / 17.3 / 17.8 | 0 → 0 |
+| Group resize (covers) | 38.4 / 44.9 / 176 | 15.7 / 19.7 / 27.3 | 60 → 0 |
+
+**Done criterion met:** no frame over 2× the period in any gesture.
+
+**Planning is consistent.** The live plan is computed from the boxes at the start, as before, for the latest pointer. A test checks that the coalesced plan equals the plan from the full input.
+
+**What did it:**
+- **The clock and the batch.** Handlers note the pointer and the frame clock applies it once per frame. Every window a frame moves or resizes goes into one `DeferWindowPos`.
+- **Quiet `<Configure>` during gestures.** A note's `<Configure>` no longer saves mid-gesture. A frozen note is laid out once, when thawed.
+- **The group ring was the largest single cost.** It is a see-through window as big as the group (1784 × 992 px). Resizing it took 11 ms a frame and redrawing it 6 ms. It now keeps room to grow, and on a plain drag it moves without redrawing.
+- **Stand-in pictures:**
+  - `ShotCache` keeps each note's picture by look version.
+  - Linked notes are photographed while the app is idle, never during a gesture.
+  - The notes in the resized note's row or column freeze at the press.
+  - A single resize makes its outline window at the press.
+  - Before this, the first frame of a group resize photographed 16 notes (107–176 ms).
+- **Rolls and the fly:**
+  - Fold, minimize and the delete fly photograph the note afresh, while it shows and is painted.
+  - A fold made by the app (an instant fold, "Fold up all notes") photographs it first too.
+  - Unfold and restore roll that picture while the note still looks that way. Otherwise the widgets roll, as before.
+  - The review found that a picture taken at alpha 0, right after re-laying the note out, comes out black or stale, because Windows hasn't repainted it yet. The spec's "always covered" recipe was dropped for that reason.
+  - The delete fly pastes into one PhotoImage.
+- **Also on the clock:**
+  - Picture pan/zoom and the calendar grip redraw once per frame.
+  - The calendar range drag rebuilds its card only when the days change.
+
+**Not done, by decision:**
+- `plan_growth` candidates are not pre-filtered. `plan_resize` costs 0.4 ms with 20 notes, and the filter would risk the results.
+- The gesture code stays in `NoteWindow` instead of a new `interact.py`; Phase 7 splits modules.
+- The single resize's remaining 13.6 ms p50 is mostly the pushed notes' own window moves.
+
+## Phase 5 results
+
+Recorded 2026-11-26 with `tools/render_bench.py` on Phase 4 code (`docs/perf/phase5-before.json`) and on Phase 5 code (`docs/perf/phase5.json`): a 500-memo list scrolled top to bottom in 41 jumps, 12 calendar day picks, and 20 keystrokes on line 1500 of a 3000-line memo.
+
+| Measure | Before | After |
+|---|---|---|
+| Memo cards alive, 500-memo list (most at once) | 140 (and growing as you scroll on) | **9** |
+| USER objects after scrolling the list | 1,403 | 207 |
+| Private memory, list shown and scrolled | +10.2 MB | +2.5 MB |
+| Keystroke in a 3000-line memo (p50 / max) | 11.6 / 12.7 ms | **0.15 / 0.28 ms** |
+| Calendar day pick, month redrawn? | yes (a full draw) | no: only the old and new day (tests) |
+| Showing the 500-memo list | 347 ms | 296 ms |
+| Scrolling it top to bottom in 41 jumps (the bench's total) | 1,475 ms | 5,893 ms |
+
+The scroll totals measure different work:
+- **Before:** the list stopped making cards once 140 were made, and jumps back over them cost nothing.
+- **After:** every jump makes the cards it lands on and lets go of the ones it left.
+- **What each costs:** a single far jump costs about 95 ms per frame, and a wheel notch 0.3 ms, or 38 ms when the notch makes a card.
+
+**Done criteria:**
+- **The list:** a 500-memo list holds ≤ 40 cards. Met: at most 9 alive, checked at every step of a top-to-bottom scroll (test).
+- **The calendar:** hover and selection make no full redraw. Met: hover since Phase 1; a day pick and a memo pick now repaint only their own items (tests). A pick still takes about 17 ms, mostly the memo list showing that day's memos.
+
+**How it works:**
+- **The list is a virtual column:**
+  - every row has its place from the measured heights of the rows above it;
+  - only rows within a screen of the view exist;
+  - the rows in view are made at once, the rest two at a time;
+  - all rows made in a pass are measured in one layout pass;
+  - rows let go of are hidden at once and destroyed a few at a time;
+  - the row at the top of the view holds still while rows above it are measured;
+  - arrow keys reach every memo, making the picked card and scrolling to it.
+- **Typing** re-tags only the lines it touched, plus the cursor's line and its neighbours. When more lines came or went than that (an undo, say), the whole memo is re-tagged as before.
+
+**Known limit:** a far jump (dragging the scroll thumb into rows not seen yet) still takes about 95 ms per frame. That is the layout of a screen of cards' wrapped text labels. Wheel scrolling costs 0.3 ms per notch, 38 ms at a notch that makes a card. Cheaper cards (drawn on one canvas instead of about 20 widgets each) would be the next step.
+
+**Not done, by decision:**
+- **No `DayIndex` keyed by a store revision.** The store has no revision, and notes change in place in many places.
+- **The picture viewer (§5.4.4)** goes with images in Phase 6.
+
+**Left for later** (spec §5.4.1–§5.4.3 items this phase did not do; the review listed them):
+- **Calendar, §5.4.1:**
+  - `_fit` is not memoized and still cuts text linearly;
+  - a day click still waits `DOUBLE_CLICK_MS` before acting;
+  - `_peek_at` has no paging guard;
+  - the big view builds its `tkfont.Font` measurers at every draw;
+  - the count card image is not cached.
+- **Memo list, §5.4.2:**
+  - cards are not kept by note id, and `refresh_lists(note_id)` doesn't exist, so a pin, unpin, trash or width change rebuilds the list's rows, now only the visible ones;
+  - the bin is not virtual;
+  - the preview window is not reused;
+  - the list goes back to the top after a pin or trash.
+- **Note text, §5.4.3:**
+  - the ranged pass removes and re-adds the tags of its few lines rather than only where a line's mark changed;
+  - `calendar_buttons()` still visits every window.
+
+**Review fixes** (a fresh whole-branch review found 0 critical and 3 important issues; all are fixed, each with a test that failed first, in `test_phase5_review.py`):
+- **Undo or redo of a bullet or to-do toggle over several lines** left wrong tags (struck-through lines that were no longer to-dos). Deletes now report the line they joined at, and that line is re-tagged.
+- **The wheel over the list's scroll thumb** moved 1 px a notch; it now moves 24, as over the list.
+- **The pictures on cards** were kept for the list's life, growing about 6 MB per scroll through a picture-heavy list. Each card's labels now hold their own pictures, which go with the card.
+
+## Phase 6 results
+
+Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after settling. Phase 5 code is in `docs/perf/phase6-before.json`, Phase 6 code in `docs/perf/phase6.json`.
+
+| Measure | Before | After | Done criterion |
+|---|---|---|---|
+| Wakeups in 10 s idle | 333 (`_drain_syscommands` 322, `_poll_screens` 10, clock idle 1) | **2** (one screen check, one clock idle); about 3 in the real app, which also checks the signal files every 10 s | < 1/s: **met** |
+| Save with nothing changed | 0.28 ms (serialised, then compared) | **0.001 ms** | ≈ 0 ms: **met** |
+| Taskbar preview, biggest picture made | 976 × 648 (2.4 MB) | 320 × 320 (0.39 MB: one window's own) | peak < 4 MB: **met** |
+| Kill during a save | — | `notes.json` still loads with the last content (test) | **met** |
+
+**How:**
+- **A wake channel (`waker.py`).**
+  - It is a loopback socket that Tcl reads with `fileevent`. The Windows message hooks ping it without calling tkinter, which deadlocks there.
+  - A second launch and the installer send "show" / "quit" to the port in `wake.port`; the signal files stay as a fallback, checked every 10 s.
+  - Display, setting and DPI changes wake a monitor check (a 15 s safety poll stays, 300 ms while a change settles).
+  - The date is checked at midnight and on a clock change or resume.
+  - The taskbar preview is looked at after changes, not at every drain.
+- **Saving.**
+  - Every attribute set on a note, pad or prefs counts as an edit, and a save with none since returns at once. The save at exit still reads and compares everything.
+  - The file is compact, and it is `fsync`ed before it replaces the old one.
+- **Bounded data:**
+  - pictures are kept by bytes (64 MB);
+  - the note places of the 8 setups seen last are kept (16 auto layout homes);
+  - the closed list keeps 20.
+
+**Review fixes.** A fresh whole-branch review found 1 critical and 2 important issues. They are fixed with seven more re-graded by what a user would see, each with a test that failed first (`tests/test_phase6_review.py`):
+- **The app minimized without a taskbar click (Win+M)** went unnoticed. Tk takes `WM_SIZE` itself, so the hook now watches `WM_WINDOWPOSCHANGED` with `IsIconic`. A restore in the same batch wins over the undo.
+- **Deleting from the bin, emptying it and the midnight purge** were not written at once, because only the notes dict changed. They now mark the save, and the set of notes and windows is part of "nothing changed".
+- **A wake channel that can't start** falls back to the old 30 ms drain and the 0.8 s signal files. A ping never connects and never waits.
+- **A burst of minimizes (Win+D)** is gathered for `MULTI_MIN_MS` and handled as one, without animation, as before.
+- **The port needs a random token** from the port file. Without it no other program, user or web page can make the app quit or come forward. Each connection has its own buffer, and data that arrives with EOF is read first.
+- **Windows shutting down or signing out** (`WM_QUERYENDSESSION`, Tk's `WM_SAVE_YOURSELF`) saves everything.
+- **The 15 s monitor check also looks at the date**, for a sleep with no resume message.
+
+**Not done, by decision:**
+- **No image worker thread.** Pictures still decode on the UI thread.
+- **`persist.py` as a module** is Phase 7's split.
+- **Not done here (left for later):**
+  - `ImageCache` for icons, tiles and inline photos;
+  - the theme eviction;
+  - per-note cached JSON;
+  - a writer thread;
+  - debug-build weakref checks of closed windows;
+  - `hook_ime` only on windows with a text field.
+
+## Phase 7 results
+
+Done 2026-11-26 (`e96a7ea`). Plan: `docs/superpowers/plans/2026-11-26-phase7-module-split.md`.
+
+| Check | Result |
+|---|---|
+| `app.py` < 600 lines | **352** (was 2,997): `__init__`, start-up, quit, the date and signal handling, errors |
+| All phases' checks still pass | The 206 tests pass. The phase tools give the same results: `idle_bench` 2 wakeups in 10 s, 0.002 ms no-change save, 0.39 MB preview peak; `interact_bench` no frame over 2× in group drag or either resize; `render_bench` at most 9 live cards for 500 memos; `look_capture` all 7 states. |
+
+**The split:**
+- **App's methods move verbatim** into mixin classes: `taskbar`, `persist`, `screens`, `settings_ctl`, `registry`, `magnet`, `layout` and `tiles`.
+  - 162 methods moved, 15 stayed in `app.py`, and the first of two `calendar()` definitions (it never ran) is gone.
+  - App's module-level constants and helpers are in `appbase.py`.
+- **A fresh review checked it by script.** Every method's source, decorators and comments match the old ones character for character. Every global name a moved method reads resolves to the same object as before. Every module is an `_APP_PART` that `set_shared` reaches.
+
+**Left for later:**
+- separate objects with public methods instead of mixins over private reach-ins;
+- `window_for` as a dict;
+- explicit imports instead of `from ui_note import *` (then `set_shared` needs another way to reach every module);
+- each module's unused imports;
+- a `settings_changed(key)` broadcast;
+- single-use constants moved next to their only user (e.g. `PICTURE_BUDGET` into `registry`).

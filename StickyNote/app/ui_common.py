@@ -17,6 +17,7 @@ from tkinter import colorchooser, filedialog, messagebox
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab, ImageTk
 
+import anim
 import holidays
 import texts
 import perf
@@ -42,7 +43,7 @@ GLYPH = {
 GLYPH["trash"] = ""                 # Delete (bin)
 GLYPH.update(bold="\ue8dd", italic="\ue8db", underline="\ue8dc", strike="\uede0",
              bullets="\ue8fd", todo="\ue73a", picture="\ueb9f")       # the format bar under the memo
-GLYPH.update(undo="\ue72c", remove="\ue711")
+GLYPH.update(undo="\ue72c", remove="\ue711", more="\ue712")     # more: the rail's \u22ef
 GLYPH.update(lock="\ue72e", unlock="\ue785", expand="\ue740", shrink="\ue73f")    # calendar header
 GLYPH.update(fold="\ue70d", unfold="\ue76c", sort="\ue8cb")     # list part heads: open / folded, sort switch
 # menus, the bin, the undo bar, empty pages (icons in place of words; the words stay in tooltips)
@@ -69,8 +70,8 @@ PALETTE = (
 
 MIN_W, MIN_H = 260, 170
 SAVE_DELAY_MS = 400
-SIGNAL_POLL_MS = 800
-DAY_CHECK_MS = 30_000
+SIGNAL_POLL_MS = 10_000          # the signal files (an older launcher or installer): the port is the way now
+DAY_CHECK_MS = 30_000            # (unused: the day is checked at midnight and on WM_TIMECHANGE / resume)
 DOUBLE_CLICK_MS = 260
 BIN_DAYS = 7                     # memos stay in the bin this long, then are deleted for good (Settings)
 UNDO_MS = 8000                   # how long the "Moved to the bin · Undo" bar stays
@@ -92,39 +93,48 @@ LINE_MARKS = (BULLET, TODO, DONE)   # all two characters long
 BOX_FONT = "Segoe UI Symbol"        # draws the boxes the same in any memo font
 FINISH_TYPING_TAG = "FinishTyping"  # bind tag: a click in a text field first finishes a Korean syllable
 FORMAT_BUTTON_W = 30            # format bar buttons (px at 100 %)
-GRAB_H = 6                       # the strip along the top for moving the note
-GLIDE_MS = 220                   # a note sliding back onto the screen / detaching
+DATE_ROW_H = 36                  # a note's date row along its top, its edge included: the folded strip
+RAIL_W = 38                      # the rail down a note's left side, with its controls
+RAIL_BUTTON = (30, 26)           # ... its buttons (w, h)
+RAIL_PAD = 6                     # ... the room above its first button and under its ⋯
+RAIL_GAP = 9                     # ... between its nav and format buttons (a short line in the middle)
+DATE_NUM_PX = 22                 # the date row: today's day, bold (px, not pt) ...
+DATE_SMALL_PX = 13               # ... the month and weekday beside it, a folded memo's text, a page's name
+CAL_NUM_PX = 28                  # the calendar's head: the month's number, bold (px) ...
+CAL_YEAR_PX = 13                 # ... and the year beside it, on its baseline (like the note's date row)
+GLIDE_MS = anim.LONG             # a note sliding back onto the screen / detaching
 FRAME_MS = 15                    # one step of a slide
-FLASH_MS = 900                   # a new or reopened note's top bar fades from the theme color this long
-NEW_SLIDE_MS = 280               # a new note slides out from behind the note it was made from
+FLASH_MS = 400                   # a new or reopened note's top bar fades from the theme color this long
+NEW_SLIDE_MS = anim.LONG         # a new note slides out from behind the note it was made from
 GROUP_RING = (6, 9, 2)           # the line around notes moving together: gap, corner radius, width (px at 100 %)
 # short animations (ms): windows fade or slide; Tk cannot fade the widgets inside a window
-TIP_FADE_MS = 120                # a tooltip fades in
+TIP_FADE_MS = anim.FAST          # a tooltip fades in
 PEEK_OFFSET = (12, 18)           # a day's memo preview: down-right of the pointer (px at 100 %)
 PEEK_DROP = 10                   # ... it drops this far into place when the day changes
-PEEK_DROP_MS = 140
-ROLL_MS = 180                    # minimize: the note rolls up to its top bar
-DOCK_SLIDE_MS = 160              # ... then the bar slides down while fading
-SCREEN_POLL_MS = 1000            # the monitors are read this often (App.check_screens)
+PEEK_DROP_MS = anim.BASE 
+ROLL_MS = anim.BASE              # minimize: the note rolls up to its top bar
+DOCK_SLIDE_MS = anim.BASE        # ... then the bar slides down while fading
+SCREEN_POLL_MS = 15_000          # the monitors are read this often anyway (a change is an event: "screens")
+SCREEN_SETTLE_POLL_MS = 300      # ... and this often while a change settles
 SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stayed this long
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
-MENU_FADE_MS = 100               # a menu fades in
-OPEN_FADE_MS = 150               # a new or reopened note fades in (and blinks)
-CLOSE_FADE_MS = 120              # a closed note fades out
-CAL_SHOW_MS = 150                # the calendar slides out from its note and fades in (and back)
+MENU_FADE_MS = anim.FAST         # a menu fades in
+OPEN_FADE_MS = anim.FAST         # a new or reopened note fades in (and blinks)
+CLOSE_FADE_MS = anim.exit_ms(anim.FAST) # a closed note fades out
+CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
-HOVER_FADE_MS = 120              # the calendar turns solid under the mouse
-MONTH_SLIDE_MS = 280             # paging months: the shown one slides out as the next slides in
-VIEW_DIP_MS = 90                 # big <-> mini by the user's click: the calendar dips out this fast, then fades back
-DELETE_FLY_MS = 350              # a deleted memo's picture flies into the bin icon
-TOAST_RISE_MS = 150              # the Undo / notice bar rises into place ...
+HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
+MONTH_SLIDE_MS = anim.LONG       # paging months: the shown one slides out as the next slides in
+VIEW_DIP_MS = anim.FAST          # big <-> mini by the user's click: the calendar dips out this fast, then fades back
+DELETE_FLY_MS = anim.LONG        # a deleted memo's picture flies into the bin icon
+TOAST_RISE_MS = anim.BASE        # the Undo / notice bar rises into place ...
 TOAST_RISE = 10                  # ... from this far below (px at 100 %)
-HINT_DROP_MS = 150               # the first-start tips drop into place ...
+HINT_DROP_MS = anim.BASE         # the first-start tips drop into place ...
 HINT_DROP = 8                    # ... from this far above (px at 100 %)
-PICTURE_FADE_MS = 150            # the next picture (tab) fades over the last one
-CHIP_SETTLE_MS = 100             # a dropped memo title slides into its new day
-DONE_FADE_MS = 200               # a ticked to-do shows dark, then fades to its done color
+PICTURE_FADE_MS = anim.BASE      # the next picture (tab) fades over the last one
+CHIP_SETTLE_MS = anim.FAST       # a dropped memo title slides into its new day
+DONE_FADE_MS = anim.BASE         # a ticked to-do shows dark, then fades to its done color
 BIG_CELL = (100, 84)             # a day in the big month view (px at 100 %), until resized
 BIG_CELL_MIN, BIG_CELL_MAX = (64, 52), BIG_CELL     # never bigger than its default size (grip, docked or not)
 BIG_CELL_FILL = (220, 180)       # the stretch rule's "big could fill the note" test only (keeps its old hysteresis)
@@ -134,7 +144,7 @@ PERIOD_BAND_H = 15               # a period memo's band in the big view (px at 1
 MEMO_CHIP_H = 18                 # a memo title in the big view (px at 100 %): 9 pt text
 CAL_MIN_ALPHA = 0.92             # the calendar is never more see-through than this: what is behind stays out of its text
 TOP_BUTTON_H = 28                # icon buttons in the top bar
-assert PILE_STEP == GRAB_H + TOP_BUTTON_H + 2     # geom keeps the 100 % value (it cannot import this module)
+assert PILE_STEP == DATE_ROW_H       # a folded note's height; geom keeps the 100 % value (it cannot import this module)
 TIDY_SIZES = {"small": (260, 200), "medium": (320, 280), "large": (400, 360)}   # "Tidy up" (px at 100 %)
 CASCADE_STEP = 28                # "Tidy up" on a full screen: the next layer starts this far in
 
@@ -333,89 +343,36 @@ def _ease_out(t):
     return 1 - (1 - t) ** 3
 
 
-def _ease_out_sine(t):
-    """A soft ease out: it starts at half the cubic's speed, so a wide slide (paging months)
-    takes no big jump on its first frames."""
-    return math.sin(t * math.pi / 2)
-
-
-FINE_TIMER_IDLE_S = 0.5          # the 1 ms timer is given back this long after the last frame
-_fine_timer = {"on": False, "last": 0.0}
-
-
-def _keep_timer_fine(widget):
-    """Frames need Windows' 1 ms timer (winapi.fine_timer); it is held only while something
-    animates and given back once nothing has for FINE_TIMER_IDLE_S."""
-    ft = _fine_timer
-    ft["last"] = time.perf_counter()
-    if ft["on"]:
-        return
-    ft["on"] = winapi.fine_timer(True)
-    if not ft["on"]:
-        return
-    root = widget._root()
-
-    def check():
-        if time.perf_counter() - ft["last"] < FINE_TIMER_IDLE_S:
-            try:
-                root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-                return
-            except tk.TclError:
-                pass
-        winapi.fine_timer(False)
-        ft["on"] = False
-    root.after(int(FINE_TIMER_IDLE_S * 1000), check)
-
-
 def animate(widget, key, ms, step, done=None, ease=_ease_out):
     """Call ``step(k)`` once a frame for ``ms`` milliseconds, k easing (``ease``, out by
-    default) from 0 to 1, then ``done()``. Frames are paced on the clock (every FRAME_MS from
-    the start, not FRAME_MS after the last one ended), so they stay even. Starting another
-    animation with the same key on the same widget replaces the running one (it stops where
-    it is). Stops quietly when the widget is gone."""
-    jobs = widget.__dict__.setdefault("_animations", {})
-    stop_animation(widget, key)
-    start = time.perf_counter()
-    _keep_timer_fine(widget)
-
-    def frame():
-        jobs.pop(key, None)
-        now = time.perf_counter()
-        if perf.ENABLED:
-            perf.perf.frame(key, now)
-        elapsed = (now - start) * 1000
-        t = 1.0 if ms <= 0 else min(1.0, elapsed / ms)
-        try:
-            step(ease(t))
-            if t < 1.0:
-                _keep_timer_fine(widget)
-                spent = (time.perf_counter() - start) * 1000
-                due = (math.floor(spent / FRAME_MS) + 1) * FRAME_MS      # the next frame on the grid
-                jobs[key] = widget.after(max(1, round(due - spent)), frame)
-                return
-        except tk.TclError:
-            return
-        if done is not None:
-            done()
-    frame()
+    default) from 0 to 1, then ``done()``: on the app's one frame clock (anim.FrameClock),
+    paced to the display. The same key on the same widget replaces the running one. Stops
+    quietly when the widget is gone."""
+    anim.clock_of(widget).animate(widget, key, ms, step, done, ease)
 
 
 def stop_animation(widget, key):
-    job = widget.__dict__.get("_animations", {}).pop(key, None)
-    if job is not None:
-        try:
-            widget.after_cancel(job)
-        except tk.TclError:
-            pass
+    try:
+        anim.clock_of(widget).stop(widget, key)
+    except tk.TclError:
+        pass
 
 
 def animating(widget, key) -> bool:
-    return key in widget.__dict__.get("_animations", {})
+    try:
+        return anim.clock_of(widget).active(widget, key)
+    except tk.TclError:
+        return False
 
 
 def fade(win, key, start, end, ms, done=None):
-    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them)."""
-    animate(win, key, ms, lambda k: win.attributes("-alpha", start + (end - start) * k), done)
+    """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them). Every
+    fade of a window is one "alpha" tween (``key`` is kept for the callers but not used): a fade
+    started while another runs turns from where that one is, never jumping to ``start``."""
+    clock = anim.clock_of(win)
+    clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
+                write=lambda v: win.attributes("-alpha", v),
+                frm=None if clock.active(win, "alpha") else start, done=done)
 
 
 def _alpha(win) -> float:
@@ -502,8 +459,11 @@ class GroupRing:
     """One rounded line in the main theme color around the notes (and docked calendars)
     moving or resizing together: they read as one piece. A see-through window over them."""
 
+    RING_SLACK = 96                 # px at 100 %: room the window keeps around the line, so a resize
+                                    # (the line grows a little every frame) does not resize the window
+
     def __init__(self, app):
-        self.app, self.top, self._size = app, None, None
+        self.app, self.top, self._size, self._frame = app, None, None, None
 
     def show(self, boxes, near, alpha=1.0):
         """``alpha``: as see-through as the notes it goes around."""
@@ -519,7 +479,7 @@ class GroupRing:
             self.cv = tk.Canvas(t, bg=TIP_KEY, bd=0, highlightthickness=0)
             self.cv.pack(fill="both", expand=True)
         self.color = accent_color(near, self.app.theme_colors().bg, "#FFFFFF")
-        self._size = None
+        self._size = self._frame = self._need = None
         self.move(boxes)
         self.top.attributes("-alpha", 0.0)
         self.top.deiconify()
@@ -531,11 +491,24 @@ class GroupRing:
             return
         px = self.app.px
         gap, r, lw = (px(v) for v in GROUP_RING)
-        x0 = min(b[0] for b in boxes) - gap - lw
-        y0 = min(b[1] for b in boxes) - gap - lw
-        x1 = max(b[2] for b in boxes) + gap + lw
-        y1 = max(b[3] for b in boxes) + gap + lw
-        w, h = x1 - x0, y1 - y0
+        need = (min(b[0] for b in boxes) - gap - lw, min(b[1] for b in boxes) - gap - lw,
+                max(b[2] for b in boxes) + gap + lw, max(b[3] for b in boxes) + gap + lw)
+        rel = tuple(sorted(tuple(int(v) for v in (b[0] - need[0], b[1] - need[1], b[2] - need[0], b[3] - need[1]))
+                           for b in boxes))
+        f, last = self._frame, getattr(self, "_need", None)
+        if f is not None and last is not None and rel == self._rel and need != last:
+            dx, dy = need[0] - last[0], need[1] - last[1]       # the same outline, moved (a drag): the
+            f = self._frame = (f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy)     # window moves, no redraw
+        self._need, self._rel = need, rel
+        if f is None or need[0] < f[0] or need[1] < f[1] or need[2] > f[2] or need[3] > f[3]:
+            if f is None:                   # (the window: the line's box with room to grow; a move
+                pad_ = 0                    # shifts it whole, so only a first resize frame takes room)
+            else:
+                pad_ = px(self.RING_SLACK)
+            f = self._frame = (need[0] - pad_, need[1] - pad_, need[2] + pad_, need[3] + pad_)
+            self._size = None
+        x0, y0 = f[0], f[1]
+        w, h = f[2] - f[0], f[3] - f[1]
         shape = tuple(sorted(tuple(int(v) for v in (b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0)) for b in boxes))
         if shape != self._size:             # the line follows the outline of the boxes, not their bounding box:
             self._size = shape              # each box grown by the gap and the line, in the line's color,
@@ -546,7 +519,10 @@ class GroupRing:
             for a0, b0, a1, b1 in shape:
                 self.cv.create_polygon(_round_rect(a0 - gap, b0 - gap, a1 + gap, b1 + gap, r),
                                        smooth=True, fill=TIP_KEY, outline="")
-        self.top.geometry(f"{w}x{h}+{x0}+{y0}")
+        geo = f"{w}x{h}+{x0}+{y0}"
+        if geo != getattr(self, "_geo", None):
+            self._geo = geo
+            self.top.geometry(geo)
 
     def hide(self):
         if self.top is not None:
@@ -854,6 +830,12 @@ class IconButton(tk.Canvas):
         if self.overlay:
             self.create_text(w / 2 - 1, h / 2 - 1, text=self.overlay,
                              font=(self.app.icon_font, max(5, size - 4), "bold"), fill=self._fg)
+
+    def set_ink(self, color):
+        """Draw the icon in ``color`` (a fade steps through colours: see CalendarPopup._draw_head)."""
+        if color != self._fg:
+            self._fg = self.ink_color = color
+            self._draw()
 
     def ink_box(self):
         """Where the icon's ink is, in this button's pixels: (x0, y0, x1, y1)."""
@@ -1163,7 +1145,7 @@ SCROLL_W = 5                     # the scroll thumb shown while scrolling (px at
 SCROLL_W_HOVER = 8               # ... under the mouse or dragged
 SCROLL_MIN = 24                  # ... never shorter than this
 SCROLL_HIDE_MS = 900             # it fades out this long after the view last moved ...
-SCROLL_FADE_MS = 260             # ... taking this long
+SCROLL_FADE_MS = anim.LONG       # ... taking this long
 
 
 class OverlayScroll:
@@ -1315,10 +1297,28 @@ class ScrollArea:
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._item, width=e.width))
         self.scroll = OverlayScroll(self.canvas, app)
+        self._listeners: list = []
+        self.step = 1                       # units a wheel notch scrolls (see fine_steps)
+
+    def fine_steps(self, notch):
+        """Scroll to the pixel (the view can be put anywhere), ``notch`` px a wheel notch."""
+        self.canvas.configure(yscrollincrement=1)
+        self.step = self.scroll.units = notch       # (the wheel over the thumb as over the list)
+
+    def listen(self, fn):
+        """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
+        if not self._listeners:
+            self.canvas.configure(yscrollcommand=self._yscroll)
+        self._listeners.append(fn)
+
+    def _yscroll(self, first, last):
+        self.scroll._set(first, last)
+        for fn in self._listeners:
+            fn()
 
     def wheel(self, event):
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            self.canvas.yview_scroll((-1 if event.delta > 0 else 1) * self.step, "units")
 
     def to_top(self):
         self.canvas.yview_moveto(0)
@@ -1381,6 +1381,12 @@ proc ::sticky::text_proxy {w callback args} {
             $callback inserted $at [$orig index "$at + [string length $chars] chars"]
             return $result
         }
+        delete {
+            set at [$orig index [lindex $args 1]]
+            set result [$orig {*}$args]
+            $callback deleted $at
+            return $result
+        }
         mark {
             set result [$orig {*}$args]
             if {[lindex $args 1] eq "set" && [lindex $args 2] eq "insert"} {$callback moved}
@@ -1419,8 +1425,8 @@ def _fill_rich_text(text: tk.Text, body, marks, inline, embed):
 
 
 def _watch_text(text: tk.Text, callback):
-    """Call ``callback("inserted", start, end)`` after every insert and
-    ``callback("moved")`` after every cursor move in ``text``."""
+    """Call ``callback("inserted", start, end)`` after every insert, ``callback("deleted", at)``
+    after every delete and ``callback("moved")`` after every cursor move in ``text``."""
     t = text.tk
     if not t.call("info", "commands", "::sticky::text_proxy"):
         t.eval(_TEXT_PROXY)

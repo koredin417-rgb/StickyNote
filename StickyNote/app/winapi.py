@@ -260,6 +260,40 @@ def disable_transitions(win) -> None:
         pass
 
 
+DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND = 33, 2
+_can_round: bool | None = None
+
+
+def can_round() -> bool:
+    """Windows 11 (build 22000 on): DWM rounds a window's corners and gives it a shadow, layered
+    or not (spike S1). Windows 10 ignores the attribute: the app keeps its 1 px border there."""
+    global _can_round
+    if _can_round is None:
+        try:
+            _can_round = IS_WINDOWS and sys.getwindowsversion().build >= 22000
+        except Exception:
+            _can_round = False
+    return _can_round
+
+
+def round_corners(win) -> bool:
+    """Ask DWM for rounded corners (and with them its shadow) on ``win``'s frame window. False
+    when it cannot (not Windows 11, no frame window yet, or DWM said no)."""
+    hwnd = hwnd_of(win)
+    try:
+        framed = hwnd and hwnd != win.winfo_id()    # (before its first map Tk has no frame window)
+    except Exception:
+        framed = False
+    if not can_round() or not framed:
+        return False
+    try:
+        value = ctypes.c_int(DWMWCP_ROUND)
+        return ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(value), ctypes.sizeof(value)) == 0
+    except Exception:
+        return False
+
+
 DWMWA_FORCE_ICONIC_REPRESENTATION = 7
 DWMWA_HAS_ICONIC_BITMAP = 10
 DWMWA_DISALLOW_PEEK = 11
@@ -627,17 +661,32 @@ def hook_ime(hwnd: int) -> bool:
 _syscmd_hooks: dict = {}
 
 
-def hook_syscommand(win, sink: list) -> None:
+WM_SIZE, SIZE_MINIMIZED, WM_WINDOWPOSCHANGED = 0x0005, 1, 0x0047
+WM_DISPLAYCHANGE, WM_SETTINGCHANGE, WM_DPICHANGED = 0x007E, 0x001A, 0x02E0
+WM_TIMECHANGE, WM_POWERBROADCAST = 0x001E, 0x0218
+PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC = 0x0007, 0x0012
+
+
+def hook_syscommand(win, sink: list, wake=None) -> None:
     """Swallow the system's minimize and restore of ``win`` (the taskbar button, Win+D...) and
     append ("min" | "restore", hwnd, time.monotonic()) to ``sink`` instead; the app does the
     animation itself. Other messages go on as before. The proc only appends to the list: it
-    never calls tkinter (a Tcl thread-state hazard), so the app drains ``sink`` from an
-    ``after`` poll. The subclass (uid 2, beside hook_ime's uid 1) removes itself on WM_NCDESTROY.
+    never calls tkinter (a Tcl thread-state hazard). ``wake()`` (a Waker's ping: a socket send,
+    no tkinter) then has the app drain ``sink``. Also queued, without swallowing them: a minimize
+    by other means (WM_WINDOWPOSCHANGED, iconic), the monitors or the work area changing ("screens"), the clock
+    changing or the computer waking up ("day"). The subclass (uid 2, beside hook_ime's uid 1)
+    removes itself on WM_NCDESTROY.
     Like hook_ime, it turns Python's own garbage collection off (see collect_garbage)."""
     hwnd = hwnd_of(win)
     if not IS_WINDOWS or not hwnd or hwnd in _syscmd_hooks:
         return
     import time
+
+    def queued(entry, swallow=True):
+        sink.append(entry)
+        if wake is not None:
+            wake()
+        return 0 if swallow else None
 
     @_SUBCLASSPROC
     def proc(h, msg, wparam, lparam, uid, _data):
@@ -645,14 +694,19 @@ def hook_syscommand(win, sink: list) -> None:
             if msg == WM_SYSCOMMAND:
                 command = wparam & 0xFFF0
                 if command == SC_MINIMIZE:
-                    sink.append(("min", h, time.monotonic()))
-                    return 0
+                    return queued(("min", h, time.monotonic()))
                 if command == SC_RESTORE:
-                    sink.append(("restore", h, time.monotonic()))
-                    return 0
+                    return queued(("restore", h, time.monotonic()))
             elif msg == WM_DWMSENDICONICTHUMBNAIL:     # the taskbar preview: the app draws it (later)
-                sink.append(("thumb", h, ((lparam >> 16) & 0xFFFF, lparam & 0xFFFF)))
-                return 0
+                return queued(("thumb", h, ((lparam >> 16) & 0xFFFF, lparam & 0xFFFF)))
+            elif msg == WM_WINDOWPOSCHANGED and user32.IsIconic(h):
+                queued(("sized", h, 0), swallow=False)     # minimized another way (Win+M): the drain
+                                                           # undoes it for the app (Tk takes WM_SIZE itself)
+            elif msg in (WM_DISPLAYCHANGE, WM_SETTINGCHANGE, WM_DPICHANGED):
+                queued(("screens", h, 0), swallow=False)
+            elif msg == WM_TIMECHANGE or (msg == WM_POWERBROADCAST
+                                          and wparam in (PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC)):
+                queued(("day", h, 0), swallow=False)
             elif msg == WM_NCDESTROY:
                 comctl32.RemoveWindowSubclass(h, proc, uid)
                 _syscmd_hooks.pop(h, None)
@@ -702,3 +756,84 @@ def gui_handles() -> tuple[int, int]:
         return 0, 0
     me = _k32.GetCurrentProcess()
     return int(_u32.GetGuiResources(me, 0)), int(_u32.GetGuiResources(me, 1))
+
+
+# ---- frame clock (anim.py) ----------------------------------------------------------------
+if IS_WINDOWS:
+    _U32_, _U64_ = ctypes.c_uint32, ctypes.c_uint64
+
+    class _DWM_TIMING_INFO(ctypes.Structure):
+        _pack_ = 1                          # dwmapi.h wraps its structs in pshpack1.h
+        _fields_ = [("cbSize", _U32_), ("rateRefresh_num", _U32_), ("rateRefresh_den", _U32_),
+                    ("qpcRefreshPeriod", _U64_), ("rateCompose_num", _U32_), ("rateCompose_den", _U32_),
+                    ("qpcVBlank", _U64_), ("cRefresh", _U64_), ("cDXRefresh", _U32_), ("qpcCompose", _U64_),
+                    ("cFrame", _U64_), ("cDXPresent", _U32_), ("cRefreshFrame", _U64_),
+                    ("cFrameSubmitted", _U64_), ("cDXPresentSubmitted", _U32_), ("cFrameConfirmed", _U64_),
+                    ("cDXPresentConfirmed", _U32_), ("cRefreshConfirmed", _U64_),
+                    ("cDXRefreshConfirmed", _U32_), ("cFramesLate", _U64_), ("cFramesOutstanding", _U32_),
+                    ("cFrameDisplayed", _U64_), ("qpcFrameDisplayed", _U64_), ("cRefreshFrameDisplayed", _U64_),
+                    ("cFrameComplete", _U64_), ("qpcFrameComplete", _U64_), ("cFramePending", _U64_),
+                    ("qpcFramePending", _U64_), ("cFramesDisplayed", _U64_), ("cFramesComplete", _U64_),
+                    ("cFramesPending", _U64_), ("cFramesAvailable", _U64_), ("cFramesDropped", _U64_),
+                    ("cFramesMissed", _U64_), ("cRefreshNextDisplayed", _U64_),
+                    ("cRefreshNextPresented", _U64_), ("cRefreshesDisplayed", _U64_),
+                    ("cRefreshesPresented", _U64_), ("cRefreshStarted", _U64_), ("cPixelsReceived", _U64_),
+                    ("cPixelsDrawn", _U64_), ("cBuffersEmpty", _U64_)]
+
+    _dwm = ctypes.WinDLL("dwmapi")
+    _dwm.DwmGetCompositionTimingInfo.argtypes = (wintypes.HWND, ctypes.POINTER(_DWM_TIMING_INFO))
+    _dwm.DwmGetCompositionTimingInfo.restype = ctypes.c_long
+    _qpf = ctypes.c_int64()
+    _k32.QueryPerformanceFrequency(ctypes.byref(_qpf))
+    _QPF = float(_qpf.value or 1)
+
+    _u32.BeginDeferWindowPos.argtypes = (ctypes.c_int,)
+    _u32.BeginDeferWindowPos.restype = wintypes.HANDLE
+    _u32.DeferWindowPos.argtypes = (wintypes.HANDLE, wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT)
+    _u32.DeferWindowPos.restype = wintypes.HANDLE
+    _u32.EndDeferWindowPos.argtypes = (wintypes.HANDLE,)
+    _u32.EndDeferWindowPos.restype = wintypes.BOOL
+    _u32.SystemParametersInfoW.argtypes = (wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT)
+    _u32.SystemParametersInfoW.restype = wintypes.BOOL
+
+_SWP_NOSIZE, _SWP_NOZORDER, _SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
+_SPI_GETCLIENTAREAANIMATION = 0x1042
+
+
+def composition_timing() -> tuple[float, float] | None:
+    """(the last vblank, the refresh period), both in time.perf_counter() seconds (it and the
+    performance counter share an epoch), or None when DWM cannot tell."""
+    if not IS_WINDOWS:
+        return None
+    info = _DWM_TIMING_INFO()
+    info.cbSize = ctypes.sizeof(info)
+    if _dwm.DwmGetCompositionTimingInfo(None, ctypes.byref(info)) != 0 or not info.qpcRefreshPeriod:
+        return None
+    return info.qpcVBlank / _QPF, info.qpcRefreshPeriod / _QPF
+
+
+def defer_move(moves) -> bool:
+    """Move (and size) several windows in one step: ``moves`` is a list of
+    (hwnd, x, y, w, h), w/h None to keep the size. False if Windows refused any of it."""
+    if not IS_WINDOWS or not moves:
+        return bool(moves) is False
+    h = _u32.BeginDeferWindowPos(len(moves))
+    if not h:
+        return False
+    for hwnd, x, y, w, hh in moves:
+        flags = _SWP_NOZORDER | _SWP_NOACTIVATE | (_SWP_NOSIZE if w is None or hh is None else 0)
+        h = _u32.DeferWindowPos(h, hwnd, None, int(x), int(y), int(w or 0), int(hh or 0), flags)
+        if not h:
+            return False
+    return bool(_u32.EndDeferWindowPos(h))
+
+
+def client_animations_enabled() -> bool:
+    """Windows' "Show animations in Windows" setting (True when it cannot be read)."""
+    if not IS_WINDOWS:
+        return True
+    on = wintypes.BOOL(1)
+    if not _u32.SystemParametersInfoW(_SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(on), 0):
+        return True
+    return bool(on.value)

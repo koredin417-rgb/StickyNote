@@ -89,6 +89,23 @@ def today_label(d: date, lang: str | None = None) -> str:
     return day_label(d, "md", lang)
 
 
+def date_row(d: date, lang: str | None = None) -> tuple[str, str]:
+    """A note's date row: the day, shown big, and the month and weekday beside it
+    ("25", "11월 수요일" / "25", "Wed, Nov"). The date format setting does not change it."""
+    lang = lang or _current
+    wd = d.weekday()
+    if lang == "ko":
+        return str(d.day), f"{d.month}월 {WEEKDAYS_LONG['ko'][wd]}"
+    return str(d.day), f"{WEEKDAYS['en'][wd]}, {MONTHS_EN_SHORT[d.month - 1]}"
+
+
+def month_head(year: int, month: int, lang: str | None = None) -> tuple[str, str]:
+    """The calendar's head: the month's number, shown big (it names the month: no month name
+    beside it), and the year ("11", "2026년" / "11", "2026")."""
+    lang = lang or _current
+    return str(month), f"{year}년" if lang == "ko" else str(year)
+
+
 def month_title(year: int, month: int) -> str:
     return f"{year}년 {month}월" if _current == "ko" else f"{MONTHS_EN[month - 1]} {year}"
 
@@ -163,6 +180,12 @@ TEXTS = {
     "menu_style": ("메모 모양…", "Memo layout…"),
     "menu_minimize": ("최소화", "Minimize"),
     "menu_trash": ("이 메모 휴지통으로", "Move this memo to the bin"),
+    "tip_more": ("더 보기", "More"),
+    "menu_this_month": ("이번 달", "This month"),
+    "menu_cal_detach": ("노트에서 떼기", "Detach from note"),
+    "menu_cal_attach": ("노트에 붙이기", "Attach to note"),
+    "menu_cal_big": ("크게 보기", "Big view"),
+    "menu_cal_small": ("작게 보기", "Small view"),
     "tip_unfold": ("펼치기\n위쪽 줄을 더블클릭해도 돼요", "Unfold\nor double-click the top bar"),
     "default_size_set": ("새 노트는 이제 이 크기로 떠요", "New notes now open at this size"),
     "default_size_off": ("새 노트 기본 크기를 해제했어요", "New notes size cleared"),
@@ -215,6 +238,12 @@ TEXTS = {
                            "Desktop sticker: a small sticker stays where it was; click it to bring it back"),
     "tip_sticker": ("클릭: 노트 다시 열기\n끌어서 옮기기", "Click: open the note again\nDrag to move"),
     "tip_settings": ("설정", "Settings"),
+    "set_motion": ("애니메이션", "Animations"),
+    "motion_full": ("전체", "Full"),
+    "motion_reduced": ("줄이기", "Reduced"),
+    "motion_off": ("끄기", "Off"),
+    "help_motion": ("창이 움직이고 나타나는 효과예요. 줄이기는 움직임 대신 짧게 흐려지고, 끄기는 바로 바뀌어요",
+                    "How windows move and appear. Reduced swaps movement for a short fade; Off changes things at once."),
     "tip_pin": ("항상 위에 표시", "Always on top"),
     "tip_style": ("노트 스타일", "Note style"),
     "tip_trash": ("이 메모를 휴지통으로 이동 (Ctrl+D)\n({days}일 보관, 바로 실행 취소 가능)",

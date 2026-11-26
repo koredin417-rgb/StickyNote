@@ -1,0 +1,24 @@
+{
+ "list_500": {
+  "show_ms": 347.4,
+  "scroll_41_steps_ms": 1474.6,
+  "max_live_cards": 140,
+  "user_objects": [
+   43,
+   1403
+  ],
+  "private_mb": 10.2
+ },
+ "calendar_pick_mini_ms": {
+  "p50": 15.6,
+  "max": 278.8
+ },
+ "calendar_pick_big_ms": {
+  "p50": 16.4,
+  "max": 17.6
+ },
+ "keystroke_3000_lines_ms": {
+  "p50": 11.63,
+  "max": 12.74
+ }
+}
