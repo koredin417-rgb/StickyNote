@@ -20,6 +20,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab,
 import geom
 import holidays
 import texts
+import perf
 import winapi
 from icon import draw_icon
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
@@ -131,6 +132,8 @@ TYPING_SYNC_MS = 250            # the stored memo catches up with the typing aft
 class NoteWindow:
     def __init__(self, app: App, pad: Pad, note: Note, fade_in=False):
         self.app, self.pad, self.note = app, pad, note
+        if perf.ENABLED:
+            perf.perf.track_window(self)
         self._closing = False
         self.sticker: MiniSticker | None = None     # shown on the desktop while minimized
         self.minimized = False              # hidden, standing in as its sticker (minimize / restore)
@@ -299,7 +302,8 @@ class NoteWindow:
         self.grip.bind("<ButtonRelease-1>", self._drag_end)
 
         # ---- events
-        self.header_var.trace_add("write", lambda *a: self.sync_from_widgets())
+        self._trace_ids = [(self.header_var,       # removed in destroy(): a trace keeps this window alive
+                            self.header_var.trace_add("write", lambda *a: self._sync_soon()))]
         self.header_entry.bind("<Return>", lambda e: (self.body.focus_set(), "break")[1])
         self.body.bind("<<Modified>>", self._on_body_modified)
         self.body.bind("<<Selection>>", lambda e: self._update_format_buttons())
@@ -596,17 +600,30 @@ class NoteWindow:
         if not box:
             self.preedit.place_forget()
             return
-        n, c = self.note, self.colors
+        c = self.colors
         fmt = self._formats_at_cursor()
-        style = [s for s, k in (("bold", "b"), ("italic", "i")) if k in fmt]
-        font = tkfont.Font(self.win, family=n.font_family, size=n.font_size, underline=True,
-                           weight="bold" if "bold" in style else "normal",
-                           slant="italic" if "italic" in style else "roman")
+        font = self._preedit_font_for("b" in fmt, "i" in fmt)
         self._preedit_font = font
         x, y, _w, h = box
-        self.preedit.configure(text=text, font=font, bg=c.bg, fg=c.fg)
-        self.preedit.place(x=x, y=y, height=h, bordermode="ignore")   # bbox counts from the outer edge
+        shown = (text, box, font, c.bg, c.fg)
+        if shown != getattr(self, "_preedit_last", None) or not self.preedit.winfo_ismapped():
+            self._preedit_last = shown
+            self.preedit.configure(text=text, font=font, bg=c.bg, fg=c.fg)
+            self.preedit.place(x=x, y=y, height=h, bordermode="ignore")   # bbox counts from the outer edge
         self._later("preedit", 120, self._show_preedit)
+
+    def _preedit_font_for(self, bold: bool, italic: bool) -> tkfont.Font:
+        """The underlined font the syllable being typed is shown in, made once per style
+        (it was made anew at every key and every 120 ms check)."""
+        n = self.note
+        key = (n.font_family, n.font_size, bold, italic)
+        fonts = self.__dict__.setdefault("_preedit_fonts", {})
+        font = fonts.get(key)
+        if font is None:
+            font = fonts[key] = tkfont.Font(self.win, family=n.font_family, size=n.font_size, underline=True,
+                                            weight="bold" if bold else "normal",
+                                            slant="italic" if italic else "roman")
+        return font
 
     def _draw_period_band(self):
         cv, c, px, note = self.period_band, self.colors, self.app.px, self.note
@@ -1179,8 +1196,26 @@ class NoteWindow:
         self.cancel_jobs()
         stop_animation(self.win, "fade")
         stop_animation(self.win, "roll")
+        stop_animation(self.win, "flash")
+        self._release()
         if self.win.winfo_exists():
             self.win.destroy()
+
+    def _release(self):
+        """Let go of what would keep this window (and its pictures) alive once it is closed:
+        variable traces live in Tcl and hold their callbacks, and through them this window."""
+        for var, name in self._trace_ids:
+            try:
+                var.trace_remove("write", name)
+            except tk.TclError:
+                pass
+        self._trace_ids = []
+        self.list_view.release()
+        self.viewer.release()
+        self._roll_shot = None
+        self._inline = {}
+        if self.app.last_note is self:
+            self.app.last_note = None
 
     def cancel_jobs(self):
         for job in self._jobs.values():
@@ -1330,10 +1365,14 @@ class NoteWindow:
         if self.pad.collapsed:              # folded up: what the memo says, left-aligned, cut to fit
             lines = self._fold_lines()
             full = " · ".join(lines)
-            text, room = full, max(0, hi - lo - px(8))
-            while text and self._date_font.measure(text + "…") > room:
-                text = text[:-1]
-            text = full if text == full else text.rstrip(" ·") + "…"
+            room = max(0, hi - lo - px(8))
+            f = self._date_font
+            key = (full, room, f.cget("family"), f.cget("size"), f.cget("weight"))
+            fit = getattr(self, "_fold_fit", None)
+            if fit is None or fit[0] != key:        # (runs at every resize and calendar_buttons())
+                narrow = min(f.measure(c) for c in " i.·l")
+                fit = self._fold_fit = (key, fit_text(full, room, f.measure, narrow))
+            text = fit[1]
             self.date_label.configure(text=text, anchor="w")
             self.date_label.place(x=lo + px(2), y=0, relheight=1, width=max(1, hi - lo - px(2)))
             shown = "\n".join(lines[:6]) + ("\n…" if len(lines) > 6 else "")
@@ -1604,6 +1643,7 @@ class NoteWindow:
         return "break"
 
     # ---- edits ----------------------------------------------------------------------------------
+    @perf.timed("body_modified")
     def _on_body_modified(self, _event=None):
         if not self.body.edit_modified():
             return
@@ -2149,6 +2189,7 @@ class NoteWindow:
         self._snap_id = sid
         return nx, ny
 
+    @perf.timed("drag_move")
     def _drag_move(self, event):
         if self._drag:
             dx, dy = self._drag
@@ -2204,6 +2245,7 @@ class NoteWindow:
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)
 
+    @perf.timed("resize_move")
     def _resize_move(self, event):
         if self._resize:
             x0, y0, w0, h0 = self._resize

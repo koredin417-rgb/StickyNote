@@ -82,59 +82,71 @@ def paint_now(win):
         pass
 
 
+_snap = None                               # gdi32/user32 prototypes for snapshot(), declared once
+
+
+def _snapshot_api():
+    global _snap
+    if _snap is None:
+        from ctypes import wintypes
+        H = wintypes.HANDLE
+
+        class BIH(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
+                        ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
+                        ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
+                        ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+        g, u = ctypes.WinDLL("gdi32"), ctypes.WinDLL("user32")    # own prototypes, apart from user32 above
+        u.GetDC.restype, u.GetDC.argtypes = H, (wintypes.HWND,)
+        u.ReleaseDC.argtypes = (wintypes.HWND, H)
+        u.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+        u.PrintWindow.argtypes = (wintypes.HWND, H, wintypes.UINT)
+        g.CreateCompatibleDC.restype, g.CreateCompatibleDC.argtypes = H, (H,)
+        g.CreateCompatibleBitmap.restype = H
+        g.CreateCompatibleBitmap.argtypes = (H, ctypes.c_int, ctypes.c_int)
+        g.SelectObject.restype, g.SelectObject.argtypes = H, (H, H)
+        g.DeleteObject.argtypes = (H,)
+        g.DeleteDC.argtypes = (H,)
+        g.GetDIBits.argtypes = (H, H, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                                ctypes.POINTER(BIH), wintypes.UINT)
+        _snap = (g, u, BIH)
+    return _snap
+
+
 def snapshot(win):
     """What a Tk toplevel shows, drawn by the window itself (PrintWindow, so covered or
-    off-screen parts too): (width, height, BGRX bytes), or None."""
+    off-screen parts too): (width, height, BGRX buffer), or None. The buffer is the ctypes
+    array itself (no copy); Image.frombuffer reads it as it is."""
     hwnd = hwnd_of(win) if IS_WINDOWS else 0
     if not hwnd:
         return None
     from ctypes import wintypes
-    gdi32 = ctypes.WinDLL("gdi32")
-    H = wintypes.HANDLE
-    user32.GetDC.restype = H
-    user32.GetDC.argtypes = (wintypes.HWND,)
-    user32.ReleaseDC.argtypes = (wintypes.HWND, H)
-    user32.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
-    user32.PrintWindow.argtypes = (wintypes.HWND, H, wintypes.UINT)
-    gdi32.CreateCompatibleDC.restype = H
-    gdi32.CreateCompatibleDC.argtypes = (H,)
-    gdi32.CreateCompatibleBitmap.restype = H
-    gdi32.CreateCompatibleBitmap.argtypes = (H, ctypes.c_int, ctypes.c_int)
-    gdi32.SelectObject.restype = H
-    gdi32.SelectObject.argtypes = (H, H)
-    gdi32.DeleteObject.argtypes = (H,)
-    gdi32.DeleteDC.argtypes = (H,)
-
-    class BIH(ctypes.Structure):
-        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
-                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
-                    ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
-                    ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
-                    ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
-    gdi32.GetDIBits.argtypes = (H, H, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
-                                ctypes.POINTER(BIH), wintypes.UINT)
+    gdi32, u32, BIH = _snapshot_api()
     r = wintypes.RECT()
-    if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
+    if not u32.GetWindowRect(hwnd, ctypes.byref(r)):
         return None
     w, h = r.right - r.left, r.bottom - r.top
     if w <= 0 or h <= 0:
         return None
-    hdc = user32.GetDC(None)
+    hdc = u32.GetDC(None)
     mdc = gdi32.CreateCompatibleDC(hdc)
     bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+    old = gdi32.SelectObject(mdc, bmp)
     try:
-        gdi32.SelectObject(mdc, bmp)
-        if not user32.PrintWindow(hwnd, mdc, 2):            # PW_RENDERFULLCONTENT
+        if not u32.PrintWindow(hwnd, mdc, 2):               # PW_RENDERFULLCONTENT
             return None
         bih = BIH(biSize=ctypes.sizeof(BIH), biWidth=w, biHeight=-h, biPlanes=1, biBitCount=32)
         buf = ctypes.create_string_buffer(w * h * 4)
         if not gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bih), 0):
             return None
-        return w, h, buf.raw
+        return w, h, buf
     finally:
+        if old:
+            gdi32.SelectObject(mdc, old)                    # the bitmap out of the DC before it is deleted
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mdc)
-        user32.ReleaseDC(None, hdc)
+        u32.ReleaseDC(None, hdc)
 
 
 def fine_timer(on: bool) -> bool:
@@ -651,3 +663,42 @@ def hook_syscommand(win, sink: list) -> None:
     if comctl32.SetWindowSubclass(hwnd, proc, 2, 0):
         _syscmd_hooks[hwnd] = proc          # keep the callback alive while the window lives
         _keep_gc_out_of_procs()
+
+
+# ---- measurements (perf.py) ---------------------------------------------------------------
+if IS_WINDOWS:
+    class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+                    ("PrivateUsage", ctypes.c_size_t)]
+
+    _k32 = ctypes.WinDLL("kernel32")                # own prototypes, apart from the shared handle
+    _k32.GetCurrentProcess.restype = wintypes.HANDLE
+    _k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(_PROCESS_MEMORY_COUNTERS_EX),
+                                             wintypes.DWORD)
+    _k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+    _u32 = ctypes.WinDLL("user32")
+    _u32.GetGuiResources.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    _u32.GetGuiResources.restype = wintypes.DWORD
+
+
+def process_memory() -> int:
+    """This process's private bytes (what it alone holds in memory), or 0 off Windows."""
+    if not IS_WINDOWS:
+        return 0
+    c = _PROCESS_MEMORY_COUNTERS_EX()
+    c.cb = ctypes.sizeof(c)
+    if not _k32.K32GetProcessMemoryInfo(_k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+        return 0
+    return int(c.PrivateUsage)
+
+
+def gui_handles() -> tuple[int, int]:
+    """(GDI objects, USER objects) this process holds now, or (0, 0) off Windows."""
+    if not IS_WINDOWS:
+        return 0, 0
+    me = _k32.GetCurrentProcess()
+    return int(_u32.GetGuiResources(me, 0)), int(_u32.GetGuiResources(me, 1))

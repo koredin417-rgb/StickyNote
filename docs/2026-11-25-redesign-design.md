@@ -185,7 +185,7 @@ clock.tween(owner, channel, to, token="long", curve=None, done=None, frm=None) -
 
 #### 5.1.5 Garbage collection and the clock
 
-- **After startup:** call `gc.freeze()` once the first windows are shown.
+- **At the start of `App.__init__`**, before any window or memo exists: `gc.collect()` then `gc.freeze()`. *(Changed in Phase 1: freezing after the first windows were shown made those windows impossible to free when closed, since frozen objects are never collected.)*
 - **The 30 ms `collect_garbage()` call is removed** (see §5.6). Instead, `clock.idle(collect)` runs a collection 1 s after the clock goes idle, and every 10 s at most while the app sits idle with no animation.
 - **During animation:** no collection runs while the clock is active.
 - **Cycles:** cycles made while animating are collected at the next idle.
@@ -560,8 +560,11 @@ Each phase ends with a working app, checked in `preview.py` against the perf har
 | # | Question | Why it matters | If the answer is no |
 |---|---|---|---|
 | S1 | Do DWM rounded corners and the DWM shadow apply to Tk `overrideredirect` (WS_POPUP) windows that are **layered** (`-alpha` < 1)? Try `DWMWA_WINDOW_CORNER_PREFERENCE`, and for the shadow `DwmExtendFrameIntoClientArea` with 1 px margins, or `CS_DROPSHADOW` on the class. | The calendar is always layered, and notes are layered when transparency > 0. | **Decided policy:** S1 runs in Phase 0, and its screenshots go to the user before Phase 3 starts. Unless the user then picks otherwise, the fallback ships everywhere, the same on every window whether or not it is layered, so corners never change with transparency: `SetWindowRgn` rounded corners (hard-edged), an app-drawn 1 px border, no shadow. If DWM works only on non-layered windows, the fallback is used everywhere. Phase 3's "mockup parity" means layout, type and colour; the shadow is required only if S1 succeeds. |
+| S1 result | **Works (2026-11-25, Windows build 26300, `tools/spikes/s1_dwm_corners.py`).** Setting only `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND` on the frame hwnd gives anti-aliased rounded corners **and** the DWM shadow on Tk `overrideredirect` windows, both opaque and layered (`-alpha` 0.92). `DwmExtendFrameIntoClientArea` and `CS_DROPSHADOW` add nothing; don't use them. Screenshots: `docs/perf/s1-*.png` (local, git-ignored). | | Phase 3 uses the DWM attribute. On Windows 10 the attribute is ignored and windows stay square, so keep the 1 px border there (detect via build < 22000). |
 | S2 | Does `DeferWindowPos` on Tk toplevels keep Tk's geometry bookkeeping right (`winfo_rootx`, `<Configure>`), including across monitors with different DPI? | §5.1.4 | Keep `geometry()` per window (`BATCH_MOVES = False`); group moves stay one call per window, but in the same frame. |
+| S2 result | **Batch OK (2026-11-25, `tools/spikes/s2_defer_window_pos.py`).** One `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos` call moved 4 Tk toplevels; `winfo_rootx/rooty` matched and each got `<Configure>`; a 120-frame glide had 0 px drift. **Not checked:** crossing to a second monitor (only one monitor here), nor mixed DPI. | | Phase 2 uses the batch with `BATCH_MOVES` on; re-run this script on a multi-monitor setup before shipping Phase 2, and keep the `geometry()` fallback. |
 | S3 | Can `DwmGetCompositionTimingInfo` be read reliably via ctypes, and do `after` delays computed from it land within ±2 ms with `timeBeginPeriod(1)`? | §5.1.1 pacing | Fall back to a 16.67 ms grid from the first frame; still a big improvement on today's free-running loop. |
+| S3 result | **Works (2026-11-25, `tools/spikes/s3_frame_timing.py`).** `DwmGetCompositionTimingInfo` succeeds (packed struct, `cbSize` 292); `perf_counter` and QPC/freq share an epoch (offset 0.001 ms). This display runs at **71.9 Hz (13.9 ms)**, not 60 Hz, so the app's fixed 15 ms step beats against it. `after()` callbacks aimed at vblank − 2 ms with the 1 ms timer held landed p50 0.48 / p95 1.16 / max 4.59 ms late (target p95 ≤ 2 ms: met). | | Phase 2 paces on DWM vblank targets as designed; the 16.67 ms grid stays only as the fallback. |
 
 **Other risks:**
 - **List virtualization** touches keyboard navigation (↑/↓/Enter in search results) and scroll position. Both must be kept: test with search, pin and the bin.
@@ -590,3 +593,37 @@ Each phase ends with a working app, checked in `preview.py` against the perf har
   - the 400 ms flash;
   - keeping 8 monitor setups;
   - the 64 MB image budget.
+
+---
+
+## Baseline (Phase 0)
+
+Recorded 2026-11-25 with `tools/baseline.py baseline` (`docs/perf/baseline.json`): real monitors, a scratch data folder, `STICKY_PERF=1`. Frame figures are intervals between frames, in ms (60 Hz ≈ 16.7).
+
+| Scenario | Wall | Δ private memory | Frames (p95 / max ms) | Spans (p95 ms) | Notes |
+|---|---|---|---|---|---|
+| open_20 | 3.2 s | +11.7 MB | fade 24.5 / 108, flash 14.6 / 27.6, motion 30.2 / 34.8 | save 3.0 | Glides step at about 30 ms (no fine timer: A2) |
+| tidy | 0.5 s | 0 | motion 19.3 / 19.3 | – | |
+| group_drag (8 notes) | 1.4 s | 0 | – | drag_move 0.7 | |
+| resize | 2.8 s | +0.1 MB | show 75.3 / 75.3, motion 23.4 | resize_move 0.3 | |
+| calendar_paging | 3.0 s | +1.9 MB | slide 54.8, motion 54.9, page 19.6 / 71.6 | calendar_draw 14.1 | Frames of up to 55–72 ms while paging |
+| typing (300 chars) | 5.7 s | +0.1 MB | – | body_modified ≈ 0 | Inserts by script, not key events: per-key handlers (`_typed`) aren't exercised. Limitation of this scenario. |
+| list_500 | 6.3 s | **+45.1 MB** | – | list_refresh 148.6, calendar_draw 271.4 | Building all 500 cards took 6.0 s; **USER objects 649 → 5,277** |
+| open_close_50 | 27.1 s | +8.2 MB | fade 67.3 / **200**, flash 24.3 / **207** | save 5.0 (n=101) | **70 note windows alive with 20 open: all 50 closed windows leaked (M1)** |
+
+## Phase 1 results
+
+Recorded 2026-11-25 with `tools/baseline.py phase1` (`docs/perf/phase1.json`), same machine and scenarios as the baseline.
+
+| Scenario | Baseline | Phase 1 |
+|---|---|---|
+| open_close_50: live note windows (20 open) | **70** (all 50 closed windows leaked) | **20** (every closed window freed) |
+| open_close_50: Δ private memory | +8.2 MB | +5.1 MB. A separate 200-cycle run stays flat (30.0 → 30.8 → 31.4 → 31.0 → 31.5 MB per 50 cycles): no growth per close, the rest is the allocator's high-water mark |
+| Glide frames (motion p95 / max ms): open_20 | 30.2 / 34.8 | 26.0 / 31.0 |
+| resize | 23.4 / 23.4 | 16.5 / 16.5 |
+| open_close_50 | 20.5 / 25.6 | 18.5 / 21.7 |
+| tidy | 19.3 / 19.3 | 19.2 / 19.2 |
+| Folded title, 20,000-character memo (`_fit_date`) | 21,104 ms | < 50 ms (test) |
+| Idle 30 ms drain, 5 notes | 7 window lookups per tick | 0 note lookups (test) |
+
+Still slow, for later phases: fade/flash frames up to ~200 ms while windows are being built (Phase 2 clock; fade p95 in open_close_50 ranged 67–147 ms between runs, so it is noisy), calendar paging frames ~54 ms (Phase 5), and the 500-memo list (6 s, +45 MB, ~5,300 USER objects; Phase 5). Glide frames in open_20 stay above the display period because window creation blocks the loop (Phase 2).

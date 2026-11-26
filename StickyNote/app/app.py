@@ -47,6 +47,8 @@ import grid
 import holidays
 import space
 import texts
+import gc
+import perf
 import winapi
 from geom import Box, Screen
 from icon import draw_icon
@@ -87,6 +89,11 @@ class App:
     def __init__(self, folder, root: tk.Tk | None = None, signal_file: Path | None = None,
                  screens: list[Screen] | None = None):
         # tests: these screens stand in for the real monitors (see screens()), from the start
+        # what the imports made (modules, classes, constants) lives for good: the collector stops
+        # walking it. Done before any window or memo exists: frozen objects are never freed,
+        # and a window has to be freed when it closes (NoteWindow._release)
+        gc.collect()
+        gc.freeze()
         self._fake_screens = list(screens) if screens is not None else None
         self._screens = None                        # the real monitors, read once (screens())
         self.store = NoteStore(folder)
@@ -625,6 +632,8 @@ class App:
         """Close a note window. Closing the last one quits; the windows closed just before it
         (within CLOSE_ALL_S, e.g. the taskbar's "Close all windows") come back at the next
         start, where they were, with the last one."""
+        if "sync" in nw._jobs:                      # typed just before (the sync waits for a pause):
+            nw.sync_from_widgets()                  # caught up first, so is_empty below is right
         now = time.monotonic()
         if len(self.windows) == 1:                  # last one: quit, remembering where it was
             if nw.note.is_empty:
@@ -2511,6 +2520,7 @@ class App:
                 if w.calendar:
                     w.calendar.draw()
 
+    @perf.timed("save")
     def save_now(self):
         for nw in self.windows.values():
             if not nw.win.winfo_exists():
@@ -2747,11 +2757,12 @@ class App:
             return
         winapi.collect_garbage()
         asked, self._syscommands[:] = list(self._syscommands), []
-        by_hwnd = {winapi.hwnd_of(nw.win): nw for nw in self.windows.values() if nw.win.winfo_exists()}
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it
             winapi.restore(self.proxy, raw=True)
             asked.append(("min", proxy, 0.0))
+        by_hwnd = ({winapi.hwnd_of(nw.win): nw for nw in self.windows.values() if nw.win.winfo_exists()}
+                   if asked else {})                # (idle: no note looked up, 33 times a second)
         mins = [e for e in asked if e[0] == "min"]
         multi = len(mins) >= 2 and mins[-1][2] - mins[0][2] <= MULTI_MIN_MS / 1000
         try:

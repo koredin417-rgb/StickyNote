@@ -23,6 +23,7 @@ import geom
 from geom import CAL
 import holidays
 import texts
+import perf
 import winapi
 from icon import draw_icon
 from motion import CLICK_THROUGH_ALPHA
@@ -1618,6 +1619,7 @@ class CalendarPopup:
             g.tag_lower("hover", f"d{d.isoformat()}")
 
     # -- drawing
+    @perf.timed("calendar_draw")
     def draw(self, keep=None):
         """Draw the month. ``keep``: a tag whose items stay (a page sliding out: _page_to)."""
         c, g, px = self.colors, self.grid, self.app.px
@@ -1630,7 +1632,7 @@ class CalendarPopup:
         for i, letter in enumerate(texts.week_letters()):
             color = c.sunday if i == 0 else c.saturday if i == 6 else c.muted
             g.create_text(i * cw + cw / 2, hh / 2, text=letter, fill=color, font=(UI_BOLD, 8, "bold"), tags=("wk",))
-        today, marked = date.today(), self.marked_days()
+        today = date.today()
         red = {d for d in holidays.in_year(y)} | {d for d in holidays.in_year(y - 1 if m == 1 else y + 1)}
         self._cells, self._chips, self._spots = [], [], {}
         weeks = _calendar.Calendar(firstweekday=6).monthdatescalendar(y, m)
