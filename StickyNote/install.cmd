@@ -5,8 +5,9 @@ if not exist "%~dp0runtime\python.exe" (
   pause
   exit /b 1
 )
-fltmc >nul 2>&1 || (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process -FilePath '%~f0' -Verb RunAs } catch { Write-Host '관리자 권한을 받지 못해 설치하지 않았습니다.'; Start-Sleep 4 }"
-  exit /b
-)
+fltmc >nul 2>&1 && goto install
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process -FilePath '%~f0' -Verb RunAs -ErrorAction Stop; exit 0 } catch { exit 1 }"
+if not errorlevel 1 exit /b
+echo 관리자 권한 없이 설치합니다. (내 사용자 폴더에 설치되므로 그대로 쓸 수 있습니다)
+:install
 "%~dp0runtime\python.exe" "%~dp0app\install.py"
