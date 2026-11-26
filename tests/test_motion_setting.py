@@ -38,7 +38,9 @@ class MotionSettingTest(unittest.TestCase):
         pump(self.app, timeout=0.1)
         self.assertEqual((self.nw.pad.x, ends), (x + 150, [1]))
         self.app.save_now()
-        self.assertIn('"motion": "off"', (Path(self.tmp.name) / "notes.json").read_text(encoding="utf-8"))
+        import json                                     # (the file is compact since Phase 6)
+        saved = json.loads((Path(self.tmp.name) / "notes.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["prefs"]["motion"], "off")
 
     def test_reduced_crossfades_instead_of_gliding(self):
         self.app.set_motion("reduced")

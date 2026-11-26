@@ -89,6 +89,21 @@ def _side_of(note: Box, cal: Box) -> str:
 
 QUIT_SIGNAL = "quit.signal"             # the installer asks a running app to close (saved)
 
+SETUPS_KEPT = 8                  # monitor setups whose note places are remembered (the ones seen last)
+GRID_HOMES_KEPT = 16             # ... and auto layout homes (one per screen of those setups)
+CLOSED_KEPT = 20                 # closed notes "Reopen closed note" can bring back
+PICTURE_BUDGET = 64 * 1024 * 1024   # bytes of shrunk pictures kept for the list, the strip and the preview
+
+
+def _keep_recent(d: dict, key, value, limit=SETUPS_KEPT) -> None:
+    """``d[key] = value``, ``key`` now the most recent; only the ``limit`` most recent are kept
+    (a dict keeps its order, in memory and in the saved file)."""
+    d.pop(key, None)
+    d[key] = value
+    for old in list(d)[:-limit]:
+        del d[old]
+
+
 class App:
     def __init__(self, folder, root: tk.Tk | None = None, signal_file: Path | None = None,
                  screens: list[Screen] | None = None):
@@ -674,6 +689,7 @@ class App:
         if not nw.note.is_empty:
             self._recently_closed.append((now, nw.pad))
             self._closed.append(nw.pad)             # for "Reopen closed note" (Ctrl+Shift+T)
+            del self._closed[:-CLOSED_KEPT]
         del self.windows[nw.pad.id]
         self.forget_links(nw.pad.id)                # (calendar_heir has used them: NoteWindow.close)
         self.space_changed()
@@ -1680,12 +1696,17 @@ class App:
 
     @staticmethod
     def _stamp(pad: Pad, key: str) -> None:
-        """The pad's current (top-level) copy as its copy for setup ``key``."""
+        """The pad's current (top-level) copy as its copy for setup ``key`` (the 8 setups seen last
+        are kept: _keep_recent)."""
         if pad.x is None or pad.y is None:
             return
-        pad.setups[key] = {"x": pad.x, "y": pad.y, "w": pad.width, "h": pad.height,
-                           "links": list(pad.links), "stacked": bool(pad.stacked)}
-        pad.calendar_setups[key] = {"pos": list(pad.calendar_pos) if pad.calendar_pos else None}
+        _keep_recent(pad.setups, key, {"x": pad.x, "y": pad.y, "w": pad.width, "h": pad.height,
+                                       "links": list(pad.links), "stacked": bool(pad.stacked)})
+        _keep_recent(pad.calendar_setups, key, {"pos": list(pad.calendar_pos) if pad.calendar_pos else None})
+
+    def _remember_setup(self, key: str) -> None:
+        _keep_recent(self.prefs.setup_scales, key, self.scale)
+        self.prefs.last_setup = key
 
     def _stamp_setups(self) -> None:
         """Every save: the current copy goes into setups[key] and calendar_setups[key], with the scale
@@ -1693,8 +1714,7 @@ class App:
         key = self.setup_key
         for pad in self._every_pad():
             self._stamp(pad, key)
-        self.prefs.setup_scales[key] = self.scale
-        self.prefs.last_setup = key
+        self._remember_setup(key)
 
     def _rescaled(self, box, old):
         """``box`` made at display scale ``old`` (None, or this scale: unchanged), at this one (N5)."""
@@ -2205,7 +2225,7 @@ class App:
         self._set_order([w.pad.id for w in theirs] + [w.pad.id for w in mine])
         if not theirs:
             side = self.prefs.grid_homes.get(area_key, {}).get("side", "right")
-            self.prefs.grid_homes[keys[j]] = {"x": point[0], "y": point[1], "side": side}
+            _keep_recent(self.prefs.grid_homes, keys[j], {"x": point[0], "y": point[1], "side": side}, GRID_HOMES_KEPT)
         self.arrange()
 
     def drop_tile(self, nw, point, mods: set) -> None:
@@ -2368,10 +2388,10 @@ class App:
         self._grid_rows[key] = plan.rows
         self._grid_last[key] = (plan, list(plan.spots))
         if home is not None:                    # the user's dropped home, not plan.home
-            prefs.grid_homes[key] = {"x": int(home[0]), "y": int(home[1]), "side": plan.side}
+            _keep_recent(prefs.grid_homes, key, {"x": int(home[0]), "y": int(home[1]), "side": plan.side}, GRID_HOMES_KEPT)
             self.request_save()
         elif entry is None:
-            prefs.grid_homes[key] = {"x": int(plan.home[0]), "y": int(plan.home[1]), "side": plan.side}
+            _keep_recent(prefs.grid_homes, key, {"x": int(plan.home[0]), "y": int(plan.home[1]), "side": plan.side}, GRID_HOMES_KEPT)
             self.request_save()
         self.space_changed()
         self.apply(targets, starts=starts, undo_label=undo_label, before=before)
@@ -2512,9 +2532,14 @@ class App:
         if key in self._pictures:
             self._pictures.move_to_end(key)
             return self._pictures[key]
-        photo = self._pictures[key] = _picture_photo(self, name, box, self.root)
-        while len(self._pictures) > PICTURE_CACHE:
-            self._pictures.popitem(last=False)
+        photo = _picture_photo(self, name, box, self.root)
+        if photo is None:
+            return None
+        self._pictures[key] = photo
+        self._picture_bytes = getattr(self, "_picture_bytes", 0) + photo.width() * photo.height() * 4
+        while self._picture_bytes > PICTURE_BUDGET and len(self._pictures) > 1:     # by bytes, oldest first
+            _old, gone = self._pictures.popitem(last=False)
+            self._picture_bytes -= gone.width() * gone.height() * 4
         return photo
 
     def set_date_format(self, fmt):
@@ -2809,37 +2834,43 @@ class App:
         max_w, max_h = size
         if max_w <= 0 or max_h <= 0 or getattr(self, "_thumb_off", False):
             return
-        parts = []
-        for top in self._thumb_windows():
-            shot = winapi.snapshot(top)
-            if not shot:
-                continue
-            w, h, raw = shot
-            im = Image.frombuffer("RGB", (w, h), raw, "raw", "BGRX", 0, 1)
-            mask = Image.new("L", (w, h), round(255 * _alpha(top)))
+        tops = self._thumb_windows()
+        rects = []
+        for top in tops:
             try:
-                keyed = bool(str(top.attributes("-transparentcolor")))
+                rects.append((top, top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()))
             except tk.TclError:
-                keyed = False
-            if keyed:                       # see-through corners come back black: leave them out
-                r = min(self.px(10), w // 2, h // 2)
-                dark = im.convert("L").point(lambda v: 255 if v <= 6 else 0)
-                for bx, by in ((0, 0), (w - r, 0), (0, h - r), (w - r, h - r)):
-                    box = (bx, by, bx + r, by + r)
-                    mask.paste(Image.composite(Image.new("L", (r, r), 0), mask.crop(box), dark.crop(box)), box)
-            parts.append((top.winfo_rootx(), top.winfo_rooty(), im, mask))
-        if parts:
-            x0 = min(x for x, y, im, m in parts)
-            y0 = min(y for x, y, im, m in parts)
-            x1 = max(x + im.width for x, y, im, m in parts)
-            y1 = max(y + im.height for x, y, im, m in parts)
-            pic = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
-            for x, y, im, m in parts:
-                pic.paste(im.convert("RGBA"), (x - x0, y - y0), m)
+                pass
+        if rects:                           # the scale first: no picture is ever bigger than the preview
+            x0 = min(r[1] for r in rects)
+            y0 = min(r[2] for r in rects)
+            x1 = max(r[1] + r[3] for r in rects)
+            y1 = max(r[2] + r[4] for r in rects)
+            k = min(max_w / max(1, x1 - x0), max_h / max(1, y1 - y0), 1.0)
+            pic = Image.new("RGBA", (max(1, round((x1 - x0) * k)), max(1, round((y1 - y0) * k))), (0, 0, 0, 0))
+            for top, x, y, _w, _h in rects:
+                shot = winapi.snapshot(top)
+                if not shot:
+                    continue
+                w, h, raw = shot
+                sw, sh = max(1, round(w * k)), max(1, round(h * k))
+                im = Image.frombuffer("RGB", (w, h), raw, "raw", "BGRX", 0, 1).resize((sw, sh), Image.BOX)
+                mask = Image.new("L", (sw, sh), round(255 * _alpha(top)))
+                try:
+                    keyed = bool(str(top.attributes("-transparentcolor")))
+                except tk.TclError:
+                    keyed = False
+                if keyed:                   # see-through corners come back black: leave them out
+                    r = max(1, min(round(self.px(10) * k), sw // 2, sh // 2))
+                    dark = im.convert("L").point(lambda v: 255 if v <= 6 else 0)
+                    for bx, by in ((0, 0), (sw - r, 0), (0, sh - r), (sw - r, sh - r)):
+                        box = (bx, by, bx + r, by + r)
+                        mask.paste(Image.composite(Image.new("L", (r, r), 0), mask.crop(box), dark.crop(box)), box)
+                pic.paste(im.convert("RGBA"), (round((x - x0) * k), round((y - y0) * k)), mask)
         else:
             pic = draw_icon(64).convert("RGBA")
-        k = min(max_w / pic.width, max_h / pic.height, 1.0)
-        pic = pic.resize((max(1, round(pic.width * k)), max(1, round(pic.height * k))), Image.LANCZOS)
+            kk = min(max_w / pic.width, max_h / pic.height, 1.0)
+            pic = pic.resize((max(1, round(pic.width * kk)), max(1, round(pic.height * kk))), Image.LANCZOS)
         hr = winapi.set_iconic_thumbnail(self.proxy, pic)
         if hr != 0:                         # DWM would not take it: the plain preview, not an empty one
             winapi.use_iconic_thumbnail(self.proxy, False)
