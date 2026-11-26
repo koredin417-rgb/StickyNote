@@ -661,7 +661,7 @@ def hook_ime(hwnd: int) -> bool:
 _syscmd_hooks: dict = {}
 
 
-WM_SIZE, SIZE_MINIMIZED = 0x0005, 1
+WM_SIZE, SIZE_MINIMIZED, WM_WINDOWPOSCHANGED = 0x0005, 1, 0x0047
 WM_DISPLAYCHANGE, WM_SETTINGCHANGE, WM_DPICHANGED = 0x007E, 0x001A, 0x02E0
 WM_TIMECHANGE, WM_POWERBROADCAST = 0x001E, 0x0218
 PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC = 0x0007, 0x0012
@@ -673,7 +673,7 @@ def hook_syscommand(win, sink: list, wake=None) -> None:
     animation itself. Other messages go on as before. The proc only appends to the list: it
     never calls tkinter (a Tcl thread-state hazard). ``wake()`` (a Waker's ping: a socket send,
     no tkinter) then has the app drain ``sink``. Also queued, without swallowing them: a minimize
-    by other means (WM_SIZE), the monitors or the work area changing ("screens"), the clock
+    by other means (WM_WINDOWPOSCHANGED, iconic), the monitors or the work area changing ("screens"), the clock
     changing or the computer waking up ("day"). The subclass (uid 2, beside hook_ime's uid 1)
     removes itself on WM_NCDESTROY.
     Like hook_ime, it turns Python's own garbage collection off (see collect_garbage)."""
@@ -699,8 +699,9 @@ def hook_syscommand(win, sink: list, wake=None) -> None:
                     return queued(("restore", h, time.monotonic()))
             elif msg == WM_DWMSENDICONICTHUMBNAIL:     # the taskbar preview: the app draws it (later)
                 return queued(("thumb", h, ((lparam >> 16) & 0xFFFF, lparam & 0xFFFF)))
-            elif msg == WM_SIZE and wparam == SIZE_MINIMIZED:
-                queued(("sized", h, 0), swallow=False)     # (the drain undoes a minimize of the app)
+            elif msg == WM_WINDOWPOSCHANGED and user32.IsIconic(h):
+                queued(("sized", h, 0), swallow=False)     # minimized another way (Win+M): the drain
+                                                           # undoes it for the app (Tk takes WM_SIZE itself)
             elif msg in (WM_DISPLAYCHANGE, WM_SETTINGCHANGE, WM_DPICHANGED):
                 queued(("screens", h, 0), swallow=False)
             elif msg == WM_TIMECHANGE or (msg == WM_POWERBROADCAST

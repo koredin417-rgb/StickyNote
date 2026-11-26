@@ -164,12 +164,16 @@ class App:
         self._syscommands: list = []                # what the taskbar asked the notes (hooks only append)
         # the event loop wakes on events, not polls: the hooks, a second launch and the installer ping
         port_file = Path(folder) / "wake.port"      # (each data folder its own: the preview's apart)
-        self.waker = Waker(self.root, {"sys": self._drain_syscommands, "screens": self._screens_event,
-                                       "day": self._day_event, "show": self._show_all,
-                                       "quit": self.quit}, port_file)
-        self.waker._connect()                       # (now: a hook's ping must never wait for a connection)
-        self.wake_sys = lambda: self.waker.ping("sys")
-        self._sys_job = self._thumb_job = None
+        self._sys_job = self._thumb_job = self._burst_job = None
+        try:
+            self.waker = Waker(self.root, {"sys": self._drain_syscommands, "screens": self._screens_event,
+                                           "day": self._day_event, "show": self._show_all,
+                                           "quit": self.quit}, port_file)
+            self.waker.connect()                    # (now: a hook's ping never waits for a connection)
+        except (OSError, tk.TclError) as exc:       # no wake channel: the taskbar is polled, as before
+            self.waker = None
+            self._log(f"wake channel: {exc!r}; polling instead")
+        self.wake_sys = (lambda: self.waker.ping("sys")) if self.waker is not None else (lambda: None)
         self._pictures: OrderedDict = OrderedDict()
         self._recently_closed: list = []        # (time, pad) of notes closed while others stay open
         self._keep_pads: list = []              # those to bring back at the next start
@@ -232,10 +236,12 @@ class App:
 
         self._day_job = None
         self._arm_day()
+        if self.waker is None:
+            self._sys_job = self.root.after(30, self._drain_poll)
         self.arrange_soon()                         # auto layout: tiled from the start
         if signal_file is not None:
             self._clear_signal()
-            self._poll_job = self.root.after(SIGNAL_POLL_MS, self._poll_signal)    # (older launchers' files)
+            self._poll_job = self.root.after(self._signal_ms(), self._poll_signal)    # (older launchers' files)
 
     # ---- helpers ---------------------------------------------------------------------
     def _apply_ui_font(self, families):
@@ -524,6 +530,7 @@ class App:
         del self.notes[note_id]
         self._remove_images(note)
         self.refresh_lists()
+        self.request_save()                 # (only the notes dict changed: no attribute set)
         self.save_now()
 
     def empty_bin(self):
@@ -531,6 +538,7 @@ class App:
             del self.notes[note.id]
             self._remove_images(note)
         self.refresh_lists()
+        self.request_save()                 # (only the notes dict changed: no attribute set)
         self.save_now()
 
     def purge_bin(self) -> bool:
@@ -1847,6 +1855,8 @@ class App:
         if self.closed:
             return
         try:
+            if date.today() != self._today:         # (a sleep that sent no resume message)
+                self._check_day()
             self.check_screens()
             self.apply_motion()                     # (Windows' animation setting may have changed)
         finally:
@@ -2591,7 +2601,9 @@ class App:
         """Write the notes, the windows and the settings. Nothing to do (no attribute set since
         the last save, no save asked for, no typing waiting to be read): it returns at once.
         ``force``: everything is read and compared anyway (at exit: a list changed in place)."""
+        shape = (frozenset(self.notes), frozenset(self.windows), len(self._keep_pads))   # (a memo deleted:
         if (not force and not getattr(self, "_dirty", True) and _store.edits == getattr(self, "_saved_edits", -1)
+                and shape == getattr(self, "_saved_shape", None)             # no attribute set, the dict changed)
                 and not any("sync" in nw._jobs for nw in self.windows.values())):
             if self._save_job is not None:
                 self.root.after_cancel(self._save_job)
@@ -2620,7 +2632,7 @@ class App:
         try:
             self.store.save(list(self.notes.values()), [w.pad for w in self.windows.values()] + self._keep_pads,
                             self.prefs)
-            self._dirty, self._saved_edits = False, _store.edits
+            self._dirty, self._saved_edits, self._saved_shape = False, _store.edits, shape
         except OSError as exc:              # (still dirty: the next save tries again)
             self._log(f"save failed: {exc!r}")
 
@@ -2634,10 +2646,11 @@ class App:
             self._report_error(*sys.exc_info())
         self.closed = True
         for job in (self._poll_job, self._day_job, getattr(self, "_sys_job", None), self._screen_job,
-                    getattr(self, "_thumb_job", None)):
+                    getattr(self, "_thumb_job", None), getattr(self, "_burst_job", None)):
             if job is not None:
                 self.root.after_cancel(job)
-        self.waker.close()
+        if self.waker is not None:
+            self.waker.close()
         for nw in self.windows.values():
             nw.cancel_jobs()
             if nw.calendar and nw.calendar._click_job:
@@ -2698,6 +2711,7 @@ class App:
                         w.update_date()
                 if self.purge_bin():
                     self.refresh_lists()
+                    self.request_save()     # (only the notes dict changed: no attribute set)
                     self.save_now()
         except Exception:                   # logged; the next day must still be checked
             self._report_error(*sys.exc_info())
@@ -2719,6 +2733,7 @@ class App:
         p.withdraw()
         p.overrideredirect(True)
         p.title(tr("app_title"))
+        p.protocol("WM_SAVE_YOURSELF", self._ending_session)      # Windows shutting down / signing out
         p.geometry("1x1+-30000+-30000")
         p.attributes("-alpha", 0.0)
         p.deiconify()
@@ -2885,16 +2900,28 @@ class App:
         if self.closed:
             return
         asked, self._syscommands[:] = list(self._syscommands), []
+        if (any(e[0] == "min" and e[2] for e in asked) and not self._burst_job
+                and not getattr(self, "_burst_waited", False)):
+            # a minimize: the others of a burst (Win+D) come within MULTI_MIN_MS: all taken together
+            self._syscommands[:0] = asked
+            self._burst_waited = True
+            self._burst_job = self.root.after(MULTI_MIN_MS, self._burst_due)
+            return
+        self._burst_waited = False
         words = {e[0] for e in asked}
         asked = [e for e in asked if e[0] in ("min", "restore", "thumb")]
-        if "screens" in words:
-            self._screens_event()
-        if "day" in words:
-            self._day_event()
+        try:
+            if "screens" in words:
+                self._screens_event()
+            if "day" in words:
+                self._day_event()
+        except Exception:
+            self._report_error(*sys.exc_info())
         proxy = winapi.hwnd_of(self.proxy)
         if winapi.is_iconic(self.proxy):            # minimized without a WM_SYSCOMMAND (Win+M...): undo it
             winapi.restore(self.proxy, raw=True)
-            asked.append(("min", proxy, 0.0))
+            if not any(e[0] == "restore" and e[1] == proxy for e in asked):    # (a click to restore: that)
+                asked.append(("min", proxy, 0.0))
         by_hwnd = ({winapi.hwnd_of(nw.win): nw for nw in self.windows.values() if nw.win.winfo_exists()}
                    if asked else {})                # (idle: no note looked up, 33 times a second)
         mins = [e for e in asked if e[0] == "min"]
@@ -2917,6 +2944,16 @@ class App:
         except Exception:
             self._report_error(*sys.exc_info())
 
+    def _ending_session(self) -> None:
+        try:
+            self.save_now(force=True)
+        except Exception:
+            self._report_error(*sys.exc_info())
+
+    def _burst_due(self) -> None:
+        self._burst_job = None
+        self._drain_syscommands()
+
     def _poll_signal(self):  # (show.signal: come forward; quit.signal: close)
         quit_file = self.signal_file.with_name(QUIT_SIGNAL)
         if quit_file.exists():                  # the installer asks it to close (saved first)
@@ -2930,7 +2967,20 @@ class App:
             self._clear_signal()
             for nw in self.windows.values():
                 nw.show(focus=False)
-        self._poll_job = self.root.after(SIGNAL_POLL_MS, self._poll_signal)
+        self._poll_job = self.root.after(self._signal_ms(), self._poll_signal)
+
+    def _signal_ms(self) -> int:
+        """The signal files are the only way in without a wake channel: looked at often then."""
+        return SIGNAL_POLL_MS if getattr(self, "waker", None) is not None else 800
+
+    def _drain_poll(self) -> None:
+        """No wake channel: the taskbar's requests are drained every 30 ms, as before Phase 6."""
+        self._sys_job = None
+        if self.closed:
+            return
+        self._drain_syscommands()
+        if not self.closed:
+            self._sys_job = self.root.after(30, self._drain_poll)
 
     def _log(self, text):
         try:

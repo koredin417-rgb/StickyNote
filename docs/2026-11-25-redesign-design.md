@@ -815,7 +815,7 @@ Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after sett
 
 | Measure | Before | After | Done criterion |
 |---|---|---|---|
-| Wakeups in 10 s idle | 333 (`_drain_syscommands` 322, `_poll_screens` 10, clock idle 1) | **2** (one screen check, one clock idle) | < 1/s: **met** |
+| Wakeups in 10 s idle | 333 (`_drain_syscommands` 322, `_poll_screens` 10, clock idle 1) | **2** (one screen check, one clock idle); about 3 in the real app, which also checks the signal files every 10 s | < 1/s: **met** |
 | Save with nothing changed | 0.28 ms (serialised, then compared) | **0.001 ms** | ≈ 0 ms: **met** |
 | Taskbar preview, biggest picture made | 976 × 648 (2.4 MB) | 320 × 320 (0.39 MB: one window's own) | peak < 4 MB: **met** |
 | Kill during a save | — | `notes.json` still loads with the last content (test) | **met** |
@@ -834,6 +834,15 @@ Recorded 2026-11-26 with `tools/idle_bench.py`: 5 notes, 10 s of idle after sett
   - pictures are kept by bytes (64 MB);
   - the note places of the 8 setups seen last are kept (16 auto layout homes);
   - the closed list keeps 20.
+
+**Review fixes.** A fresh whole-branch review found 1 critical and 2 important issues. They are fixed with seven more re-graded by what a user would see, each with a test that failed first (`tests/test_phase6_review.py`):
+- **The app minimized without a taskbar click (Win+M)** went unnoticed. Tk takes `WM_SIZE` itself, so the hook now watches `WM_WINDOWPOSCHANGED` with `IsIconic`. A restore in the same batch wins over the undo.
+- **Deleting from the bin, emptying it and the midnight purge** were not written at once, because only the notes dict changed. They now mark the save, and the set of notes and windows is part of "nothing changed".
+- **A wake channel that can't start** falls back to the old 30 ms drain and the 0.8 s signal files. A ping never connects and never waits.
+- **A burst of minimizes (Win+D)** is gathered for `MULTI_MIN_MS` and handled as one, without animation, as before.
+- **The port needs a random token** from the port file. Without it no other program, user or web page can make the app quit or come forward. Each connection has its own buffer, and data that arrives with EOF is read first.
+- **Windows shutting down or signing out** (`WM_QUERYENDSESSION`, Tk's `WM_SAVE_YOURSELF`) saves everything.
+- **The 15 s monitor check also looks at the date**, for a sleep with no resume message.
 
 **Not done, by decision:**
 - **No image worker thread.** Pictures still decode on the UI thread.

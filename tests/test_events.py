@@ -28,6 +28,7 @@ class WakerTest(unittest.TestCase):
         ran = []
         w = waker.Waker(self.app.root, {"x": lambda: ran.append(1)})
         try:
+            w.connect()                                 # (a ping never connects: done once, at start)
             w.ping("x")
             w.ping("nobody")
             pump(self.app, lambda: ran, timeout=1)
