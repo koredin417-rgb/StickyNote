@@ -703,3 +703,47 @@ Checked 2026-11-26 on Windows 11 (build 26300, 100 %), with `tools/look_capture.
 Two rare ones are deferred (see the PR).
 
 **Not checked:** Windows 10 (none here). The fallback path, a 1 px border with square corners, is covered by tests that force `round_corners` to fail.
+
+## Phase 4 results
+
+**How it was measured.** Recorded 2026-11-26 with `tools/interact_bench.py`:
+- Phase 3 code: `docs/perf/phase4-before.json`.
+- Phase 4 code: `docs/perf/phase4.json`.
+- Each gesture runs on 20 fresh notes, made from each other so they are linked; the group is 16 notes.
+- Every display frame gets 8 mouse moves through Tk's real bindings, as from a 500–1000 Hz mouse.
+- Figures are the main thread's work per frame. The display period is **13.9 ms**, so 2× is 27.8 ms.
+
+| Gesture | Before: p50 / p95 / max (ms) | After: p50 / p95 / max (ms) | Frames over 2× the period, before → after |
+|---|---|---|---|
+| Group drag | 14.3 / 19.8 / 21.3 | 4.9 / 5.4 / 5.8 | 0 → 0 (over 1×: 41 → 0) |
+| Single-note resize (live plan) | 14.9 / 18.6 / 24.0 | 13.5 / 17.3 / 17.8 | 0 → 0 |
+| Group resize (covers) | 38.4 / 44.9 / 176 | 15.7 / 19.7 / 27.3 | 60 → 0 |
+
+**Done criterion met:** no frame over 2× the period in any gesture.
+
+**Planning is consistent.** The live plan is computed from the boxes at the start, as before, for the latest pointer. A test checks that the coalesced plan equals the plan from the full input.
+
+**What did it:**
+- **The clock and the batch.** Handlers note the pointer and the frame clock applies it once per frame. Every window a frame moves or resizes goes into one `DeferWindowPos`.
+- **Quiet `<Configure>` during gestures.** A note's `<Configure>` no longer saves mid-gesture. A frozen note is laid out once, when thawed.
+- **The group ring was the largest single cost.** It is a see-through window as big as the group (1784 × 992 px). Resizing it took 11 ms a frame and redrawing it 6 ms. It now keeps room to grow, and on a plain drag it moves without redrawing.
+- **Stand-in pictures:**
+  - `ShotCache` keeps each note's picture by look version.
+  - Linked notes are photographed while the app is idle, never during a gesture.
+  - The notes in the resized note's row or column freeze at the press.
+  - A single resize makes its outline window at the press.
+  - Before this, the first frame of a group resize photographed 16 notes (107–176 ms).
+- **Rolls and the fly:**
+  - Fold, minimize and the delete fly photograph the note afresh, while it shows and is painted.
+  - A fold made by the app (an instant fold, "Fold up all notes") photographs it first too.
+  - Unfold and restore roll that picture while the note still looks that way. Otherwise the widgets roll, as before.
+  - The review found that a picture taken at alpha 0, right after re-laying the note out, comes out black or stale, because Windows hasn't repainted it yet. The spec's "always covered" recipe was dropped for that reason.
+  - The delete fly pastes into one PhotoImage.
+- **Also on the clock:**
+  - Picture pan/zoom and the calendar grip redraw once per frame.
+  - The calendar range drag rebuilds its card only when the days change.
+
+**Not done, by decision:**
+- `plan_growth` candidates are not pre-filtered. `plan_resize` costs 0.4 ms with 20 notes, and the filter would risk the results.
+- The gesture code stays in `NoteWindow` instead of a new `interact.py`; Phase 7 splits modules.
+- The single resize's remaining 13.6 ms p50 is mostly the pushed notes' own window moves.

@@ -529,6 +529,7 @@ class Outlines:
 
     def hide(self) -> None:
         try:
-            self.top.withdraw()
+            if self.top.state() != "withdrawn":     # (asked at every frame of a live resize)
+                self.top.withdraw()
         except tk.TclError:
             pass

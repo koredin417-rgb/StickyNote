@@ -458,8 +458,11 @@ class GroupRing:
     """One rounded line in the main theme color around the notes (and docked calendars)
     moving or resizing together: they read as one piece. A see-through window over them."""
 
+    RING_SLACK = 96                 # px at 100 %: room the window keeps around the line, so a resize
+                                    # (the line grows a little every frame) does not resize the window
+
     def __init__(self, app):
-        self.app, self.top, self._size = app, None, None
+        self.app, self.top, self._size, self._frame = app, None, None, None
 
     def show(self, boxes, near, alpha=1.0):
         """``alpha``: as see-through as the notes it goes around."""
@@ -475,7 +478,7 @@ class GroupRing:
             self.cv = tk.Canvas(t, bg=TIP_KEY, bd=0, highlightthickness=0)
             self.cv.pack(fill="both", expand=True)
         self.color = accent_color(near, self.app.theme_colors().bg, "#FFFFFF")
-        self._size = None
+        self._size = self._frame = self._need = None
         self.move(boxes)
         self.top.attributes("-alpha", 0.0)
         self.top.deiconify()
@@ -487,11 +490,24 @@ class GroupRing:
             return
         px = self.app.px
         gap, r, lw = (px(v) for v in GROUP_RING)
-        x0 = min(b[0] for b in boxes) - gap - lw
-        y0 = min(b[1] for b in boxes) - gap - lw
-        x1 = max(b[2] for b in boxes) + gap + lw
-        y1 = max(b[3] for b in boxes) + gap + lw
-        w, h = x1 - x0, y1 - y0
+        need = (min(b[0] for b in boxes) - gap - lw, min(b[1] for b in boxes) - gap - lw,
+                max(b[2] for b in boxes) + gap + lw, max(b[3] for b in boxes) + gap + lw)
+        rel = tuple(sorted(tuple(int(v) for v in (b[0] - need[0], b[1] - need[1], b[2] - need[0], b[3] - need[1]))
+                           for b in boxes))
+        f, last = self._frame, getattr(self, "_need", None)
+        if f is not None and last is not None and rel == self._rel and need != last:
+            dx, dy = need[0] - last[0], need[1] - last[1]       # the same outline, moved (a drag): the
+            f = self._frame = (f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy)     # window moves, no redraw
+        self._need, self._rel = need, rel
+        if f is None or need[0] < f[0] or need[1] < f[1] or need[2] > f[2] or need[3] > f[3]:
+            if f is None:                   # (the window: the line's box with room to grow; a move
+                pad_ = 0                    # shifts it whole, so only a first resize frame takes room)
+            else:
+                pad_ = px(self.RING_SLACK)
+            f = self._frame = (need[0] - pad_, need[1] - pad_, need[2] + pad_, need[3] + pad_)
+            self._size = None
+        x0, y0 = f[0], f[1]
+        w, h = f[2] - f[0], f[3] - f[1]
         shape = tuple(sorted(tuple(int(v) for v in (b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0)) for b in boxes))
         if shape != self._size:             # the line follows the outline of the boxes, not their bounding box:
             self._size = shape              # each box grown by the gap and the line, in the line's color,
@@ -502,7 +518,10 @@ class GroupRing:
             for a0, b0, a1, b1 in shape:
                 self.cv.create_polygon(_round_rect(a0 - gap, b0 - gap, a1 + gap, b1 + gap, r),
                                        smooth=True, fill=TIP_KEY, outline="")
-        self.top.geometry(f"{w}x{h}+{x0}+{y0}")
+        geo = f"{w}x{h}+{x0}+{y0}"
+        if geo != getattr(self, "_geo", None):
+            self._geo = geo
+            self.top.geometry(geo)
 
     def hide(self):
         if self.top is not None:

@@ -132,6 +132,7 @@ TYPING_SYNC_MS = 250            # the stored memo catches up with the typing aft
 class NoteWindow:
     def __init__(self, app: App, pad: Pad, note: Note, fade_in=False):
         self.app, self.pad, self.note = app, pad, note
+        self.look_version = 0               # bumped whenever what it shows changes (its kept picture: shots)
         if perf.ENABLED:
             perf.perf.track_window(self)
         self._closing = False
@@ -409,6 +410,7 @@ class NoteWindow:
             page = {"list": self.list_view, "settings": self.settings_view, "bin": self.bin_view}[view]
             page.frame.pack(fill="both", expand=True)
         self._arrange_chrome()              # (the format buttons are the memo's)
+        self.bump_look()
         tk.Misc.tkraise(self.grip)
         self._place_toast()
 
@@ -510,6 +512,7 @@ class NoteWindow:
             self.viewer.index = self.pad.tab = index
             self._fill_body(*self.note.tab_text(index))
             self.app.request_save()
+            self.bump_look()
         self.viewer.render(follow=True)
 
     def step_tab(self, delta):
@@ -537,6 +540,7 @@ class NoteWindow:
 
     def _rescale_inline(self):
         """The window changed width: fit the pictures in the text to it again."""
+        self.bump_look()
         for _key, value, index in self.body.dump("1.0", "end", image=True):
             if value in self._inline:
                 name, _old = self._inline[value]
@@ -614,6 +618,7 @@ class NoteWindow:
         return font
 
     def _draw_period_band(self):
+        self.bump_look()
         cv, c, px, note = self.period_band, self.colors, self.app.px, self.note
         cv.configure(bg=c.bg)
         cv.delete("all")
@@ -652,6 +657,7 @@ class NoteWindow:
         cal.draw()
 
     def _draw_add_bar(self, hover=False):
+        self.bump_look()
         cv, c, px = self.add_bar, self.colors, self.app.px
         cv.configure(bg=c.bg)
         cv.delete("all")
@@ -714,16 +720,20 @@ class NoteWindow:
 
     def _page_picture(self):
         """The memo page as it shows now, for the deletion animation: (image, x, y) in this window's
-        pixels; None off the home page, folded, hidden, or when the screen can't be read."""
+        pixels, cut from the note's picture (shots: not the screen, so nothing over the note shows
+        in it); None off the home page, folded, hidden, or when no picture can be had."""
         try:
             if self.view != "home" or self.pad.collapsed or not self.home.winfo_ismapped():
                 return None
-            x0, y0, w = self.home.winfo_rootx(), self.home.winfo_rooty(), self.home.winfo_width()
-            y1 = y0 + self.home.winfo_height()
-            if w < 8 or y1 - y0 < 8:
+            x0 = self.home.winfo_rootx() - self.win.winfo_rootx()
+            y0 = self.home.winfo_rooty() - self.win.winfo_rooty()
+            w, h = self.home.winfo_width(), self.home.winfo_height()
+            if w < 8 or h < 8:
                 return None
-            img = ImageGrab.grab((x0, y0, x0 + w, y1), all_screens=True)
-            return img, x0 - self.win.winfo_rootx(), y0 - self.win.winfo_rooty()
+            shot = self.app.shots.fresh(self)
+            if shot is None:
+                return None
+            return shot.crop((x0, y0, x0 + w, y0 + h)), x0, y0
         except Exception:
             return None
 
@@ -736,23 +746,27 @@ class NoteWindow:
             bx = btn.winfo_rootx() - top.winfo_rootx() + btn.winfo_width() / 2
             by = btn.winfo_rooty() - top.winfo_rooty() + btn.winfo_height() / 2
             w0, h0 = img.size
-            cv = tk.Canvas(top, bd=0, highlightthickness=0, width=w0, height=h0)
-            cv._photo = ImageTk.PhotoImage(img, master=cv)
+            cv = self._fly_canvas = tk.Canvas(top, bd=0, highlightthickness=0, width=w0, height=h0,
+                                              bg=self.colors.bg)     # (the frame its size lags: the page's colour)
+            cv._photo = ImageTk.PhotoImage(img, master=cv)      # the one picture every frame pastes into
             pic = cv.create_image(0, 0, anchor="nw", image=cv._photo)
             cv.place(x=x, y=y)
             tk.Misc.tkraise(cv)
         except tk.TclError:
             return
-        half = img.resize((max(1, w0 // 2), max(1, h0 // 2)), Image.BOX)   # small frames scale from this
+        half = img.resize((max(1, w0 // 2), max(1, h0 // 2)), Image.BOX)   # smaller frames scale from these
+        quarter = half.resize((max(1, w0 // 4), max(1, h0 // 4)), Image.BOX)
         sx, sy = x + w0 / 2, y + h0 / 2
+        tkphoto = cv._photo._PhotoImage__photo                  # (Tk's photo under it: its size is set)
 
         def step(t):
             e = t * t                                       # speeds up into the bin
             s = 1 - 0.95 * e
             w, h = max(2, round(w0 * s)), max(2, round(h0 * s))
             cx, cy = sx + (bx - sx) * e, sy + (by - sy) * e
-            cv._photo = ImageTk.PhotoImage((img if s > 0.5 else half).resize((w, h), Image.BILINEAR), master=cv)
-            cv.itemconfigure(pic, image=cv._photo)
+            src = img if s > 0.5 else half if s > 0.25 else quarter
+            tkphoto.configure(width=w, height=h)
+            cv._photo.paste(src.resize((w, h), Image.BILINEAR))    # (no new PhotoImage a frame)
             cv.configure(width=w, height=h)
             cv.place(x=round(cx - w / 2), y=round(cy - h / 2))
 
@@ -810,6 +824,7 @@ class NoteWindow:
     def _place_toast(self):
         if self._undo_note is None and not self._notice:
             return
+        self.bump_look()
         px = self.app.px
         if self.view == "list":
             lift = self.list_view.bin_row.winfo_reqheight() + px(10)
@@ -831,7 +846,9 @@ class NoteWindow:
             self.win.after_cancel(job)
         self._undo_note, self._notice, self._undo_action = None, False, None
         stop_animation(self.toast, "rise")
-        self.toast.place_forget()
+        if self.toast.place_info():         # (it showed: the look changes)
+            self.toast.place_forget()
+            self.bump_look()
 
     def undo_trash(self):
         note = self._undo_note
@@ -995,6 +1012,13 @@ class NoteWindow:
                         write=lambda v, w=w: w.winfo_exists() and w.attributes("-alpha", v),
                         ease=anim.ease_in, frm=a, done=done if w is self.win else None)
 
+    def bump_look(self):
+        """What the note shows changed: its kept picture is no longer current (shots)."""
+        self.look_version += 1
+        shots = getattr(self.app, "shots", None)
+        if shots is not None:
+            shots.stale(self)
+
     def _pack_frame(self):
         self.frame.pack(fill="both", expand=True, padx=self.edge, pady=self.edge)
         if hasattr(self, "bar"):
@@ -1026,22 +1050,12 @@ class NoteWindow:
         self.win.geometry(f"{p.width}x{round(h)}+{p.x}+{p.y + round(dy)}")
 
     def _shot(self):
-        """A picture of the whole note as it shows now (PrintWindow), or None."""
-        try:
-            shot = winapi.snapshot(self.win) if self.win.winfo_ismapped() else None
-        except tk.TclError:
-            return None
-        if shot is None:
-            return None
-        w, h, data = shot
-        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).copy()
-        self._roll_shot = ((self.pad.width, h, self.note.color), img)      # kept: the way back rolls it too
-        return img
+        """A picture of the whole note as it shows now (taken now: shots.fresh), or None."""
+        return self.app.shots.fresh(self)
 
     def _kept_shot(self, height):
-        """The picture kept from the last roll, if the note still looks that way (same size and color)."""
-        kept = getattr(self, "_roll_shot", None)
-        return kept[1] if kept and kept[0] == (self.pad.width, height, self.note.color) else None
+        """Its kept picture at its own width and ``height`` (the last roll's), if still current."""
+        return self.app.shots.peek(self, (self.pad.width, height))
 
     def _roll_cover(self, img):
         """While it rolls (ROLL_MS), a picture of the whole note stands in, anchored at the top: the
@@ -1157,7 +1171,7 @@ class NoteWindow:
             self.app.return_note(self, "restore")
 
         win.attributes("-alpha", 0.0)
-        if animate:
+        if animate:                         # its picture from when it went, if it still looks that way
             self._roll_cover(self._kept_shot(shown))
         self._roll_geometry(bar if animate else shown, slide if animate else 0)
         win.deiconify()
@@ -1216,7 +1230,7 @@ class NoteWindow:
         self._trace_ids = []
         self.list_view.release()
         self.viewer.release()
-        self._roll_shot = None
+        self.app.shots.drop(self)
         self._inline = {}
         if self.app.last_note is self:
             self.app.last_note = None
@@ -1318,6 +1332,7 @@ class NoteWindow:
 
     def update_date(self):
         self._draw_row()
+        self.bump_look()
         if self.calendar:
             self.calendar.draw()
 
@@ -1375,6 +1390,9 @@ class NoteWindow:
                 show.remove(b)
         shown = tuple(show)
         self._rail_hidden = tuple(b for b in wanted if b not in shown)
+        if shown != getattr(self, "_rail_seen", None):     # (folding and back: the same look)
+            self._rail_seen = shown
+            self.bump_look()
         if shown != self._rail_state:
             self._rail_state = shown
             for b in self.nav_buttons + self.format_buttons:
@@ -1518,6 +1536,7 @@ class NoteWindow:
             self.calendar.recolor(self.app.theme_colors())
             self.calendar.apply_alpha()
             self.calendar.top.attributes("-topmost", p.pinned)
+        self.bump_look()
 
     def _draw_grip(self):
         g, c = self.grip, self.colors
@@ -1595,6 +1614,7 @@ class NoteWindow:
             self.viewer.frame.pack(side="top", fill="x", padx=px(8), pady=(px(2), px(4)))
             self.viewer.render(follow=True)
         tk.Misc.tkraise(self.grip)
+        self.bump_look()
 
     def _style_menu(self, x=None, y=None):
         menu = PopupMenu(self.app, self.win, self.colors)
@@ -1715,6 +1735,7 @@ class NoteWindow:
         """While typing, the stored memo catches up once the typing pauses: reading a long
         memo back (some 5 ms for 3000 lines) twice at every key made typing heavy. Whatever
         needs it at once (saving, switching memos, the list, closing) calls sync_from_widgets."""
+        self.bump_look()                    # (typed: what it shows changed)
         self._later("sync", TYPING_SYNC_MS, self.sync_from_widgets)
 
     def sync_from_widgets(self):
@@ -1979,6 +2000,7 @@ class NoteWindow:
 
     def _show_todo_icons(self, row):
         """Remove (and, when done, undo) at the right end of the to-do line ``row``."""
+        self.bump_look()
         info = self.body.dlineinfo(f"{row}.0")
         if info is None or self._line_mark(row) not in (TODO, DONE):
             self._hide_todo_icons()
@@ -1995,6 +2017,7 @@ class NoteWindow:
         self._todo_row = row
 
     def _hide_todo_icons(self):
+        self.bump_look()
         self.todo_undo.place_forget()
         self.todo_remove.place_forget()
         self._todo_row = None
@@ -2031,12 +2054,15 @@ class NoteWindow:
         return "break"
 
     def _update_format_buttons(self):
+        was = tuple(b.active for b in self.format_buttons)
         fmt = self._formats_at_cursor()
         for kind, button in zip(MARK_KINDS, self.format_buttons):
             button.set_active(kind in fmt)
         mark = self._line_mark(self.body.index("insert").split(".")[0])
         self.btn_bullets.set_active(mark == BULLET)
         self.btn_todo.set_active(mark in (TODO, DONE))
+        if tuple(b.active for b in self.format_buttons) != was:    # (a caret move alone: the same look)
+            self.bump_look()
 
     def _read_marks(self, length):
         """The formats in the text, as [kind, start, end] character offsets."""
@@ -2066,6 +2092,7 @@ class NoteWindow:
             w.stop_glide()
         self._snap_id = self._snap_hold = None
         self._drag = (event.x_root - self.win.winfo_rootx(), event.y_root - self.win.winfo_rooty())
+        self._pointer = None
         self._drag_from, self._drag_alt = (self.pad.x, self.pad.y), bool(event.state & 0x20000)
         self._drag_ctrl, self._drag_pt, self._grid_key = bool(event.state & 0x4), (event.x_root, event.y_root), None
         # the notes snapped to this one (and to those, and so on) move along, keeping their
@@ -2179,6 +2206,7 @@ class NoteWindow:
         animate(box, "drop", HINT_DROP_MS,         # drops HINT_DROP px into place
                 lambda k: box.place(relx=0.5, y=y - round(drop * (1 - k)), anchor="n", width=width))
         tk.Misc.tkraise(box)
+        self.bump_look()
 
     def hide_hints(self):
         box = getattr(self, "hints", None)
@@ -2186,6 +2214,7 @@ class NoteWindow:
             stop_animation(box, "drop")
             box.destroy()
             self.hints = None
+            self.bump_look()
 
     def close_hints(self):
         self.hide_hints()
@@ -2249,38 +2278,60 @@ class NoteWindow:
         self._snap_id = sid
         return nx, ny
 
-    @perf.timed("drag_move")
     def _drag_move(self, event):
+        """The pointer moved: noted, and applied once at the next display frame (_apply_drag)."""
         if self._drag:
-            dx, dy = self._drag
-            x, y = event.x_root - dx, event.y_root - dy
-            group = getattr(self, "_group", [])
-            self._snap_id = None
-            self._drag_pt = (event.x_root, event.y_root)
-            if not event.state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
-                x, y = self._snapped(x, y, group)
-            self.win.geometry(f"+{x}+{y}")
-            self._dropped = {self: (x, y)}          # where the drag put each (winfo_rootx can lag behind)
-            for w, ox, oy in group:
-                if w.win.winfo_exists():
-                    w.win.geometry(f"+{x + ox}+{y + oy}")
-                    self._dropped[w] = (x + ox, y + oy)
-            along = getattr(self, "_cal_along", None)
-            if along is not None:
-                cal, ox, oy, cw, ch = along
-                cal.nw.pad.calendar_pos = [x + ox, y + oy]    # (place() puts an undocked one there)
-                cal.move_to((x + ox, y + oy, x + ox + cw, y + oy + ch))
-            if group or along is not None:
-                self.app.ring.move(self._live_ring_boxes())
+            self._pointer = (event.x_root, event.y_root, event.state)
+            self.app.clock.request(self._apply_drag)
 
-    def _set_geometry(self, nw, geometry):
-        """Tell Tk only what changed (each change redraws that note)."""
-        if self._geometries.get(nw) != geometry:
-            self._geometries[nw] = geometry
-            nw.win.geometry(geometry)
+    def _flush_gesture(self):
+        """Let go before the next frame came: the last pointer is applied now, and its window moves
+        are done (the drop reads where they are)."""
+        clock = self.app.clock
+        for fn in (self._apply_drag, self._apply_resize):
+            if clock.take(fn):
+                fn()
+        clock.flush_moves()
+
+    @perf.timed("drag_move")
+    def _apply_drag(self):
+        """Once a frame: the dragged note (and those moving with it) where the last pointer puts
+        it, snapped; all of them in the frame's one window batch."""
+        if not self._drag or getattr(self, "_pointer", None) is None:
+            return
+        px_, py_, state = self._pointer
+        dx, dy = self._drag
+        x, y = px_ - dx, py_ - dy
+        group = getattr(self, "_group", [])
+        self._snap_id = None
+        self._drag_pt = (px_, py_)
+        if not state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
+            x, y = self._snapped(x, y, group)
+        clock = self.app.clock
+        clock.move(self.win, x, y)
+        self._dropped = {self: (x, y)}              # where the drag put each (winfo_rootx can lag behind)
+        for w, ox, oy in group:
+            if w.win.winfo_exists():
+                clock.move(w.win, x + ox, y + oy)
+                self._dropped[w] = (x + ox, y + oy)
+        along = getattr(self, "_cal_along", None)
+        if along is not None:
+            cal, ox, oy, cw, ch = along
+            cal.nw.pad.calendar_pos = [x + ox, y + oy]    # (place() puts an undocked one there)
+            cal.move_to((x + ox, y + oy, x + ox + cw, y + oy + ch))
+        if group or along is not None:
+            self.app.ring.move(self._live_ring_boxes())
+
+    def _place(self, nw, x, y, w=None, h=None):
+        """Tell Windows only what changed (each change redraws that note), in the frame's one batch."""
+        box = (x, y, w, h)
+        if self._geometries.get(nw) != box:
+            self._geometries[nw] = box
+            self.app.clock.move(nw.win, x, y, w, h)
 
     def _resize_start(self, event):
         self._resize = (event.x_root, event.y_root, self.win.winfo_width(), self.win.winfo_height())
+        self._pointer = None
         self._resize_area = self.app.area_of(_pad_box(self.pad))
         self._geometries = {}
         self.app.moving = True
@@ -2301,17 +2352,31 @@ class NoteWindow:
         cal = self.calendar
         self._resize_solo = (not self._resize_group and not self.app.prefs.auto_layout
                              and not (cal is not None and cal.docked))
+        if self._resize_solo:
+            self.app.outlines()             # (its window is made now, at the press: not inside a frame)
         if self._resize_group:              # the same line as when they move together
             self.app.ring.show([self._resize_box] + [b for _w, b in self._resize_group], self.win, self.pad.alpha)
             self.freeze()                   # (smooth: see freeze; the text wraps when let go)
+            a0, b0, a1, b1 = self._resize_box
+            for o, (l, t, r, b) in self._resize_group:  # those in its row or column will change size: their
+                if min(r, a1) - max(l, a0) > 0 or min(b, b1) - max(t, b0) > 0:     # pictures go in now, at
+                    o.freeze()              # the press, where nothing moves yet (not at the first frame)
+
+    def _resize_move(self, event):
+        """The pointer moved: noted, and applied once at the next display frame (_apply_resize)."""
+        if self._resize:
+            self._pointer = (event.x_root, event.y_root, event.state)
+            self.app.clock.request(self._apply_resize)
 
     @perf.timed("resize_move")
-    def _resize_move(self, event):
-        if self._resize:
+    def _apply_resize(self):
+        """Once a frame: the note as big as the last pointer makes it; the notes resized or pushed
+        along (a group), or the live plan (one note), in the frame's one window batch."""
+        if self._resize and getattr(self, "_pointer", None) is not None:
             x0, y0, w0, h0 = self._resize
             px = self.app.px
-            w = max(px(MIN_W), w0 + event.x_root - x0)
-            h = max(px(MIN_H), h0 + event.y_root - y0)
+            w = max(px(MIN_W), w0 + self._pointer[0] - x0)
+            h = max(px(MIN_H), h0 + self._pointer[1] - y0)
             dw, dh = w - w0, h - h0
             a0, b0, a1, b1 = self._resize_box
             slack = px(2)
@@ -2325,7 +2390,7 @@ class NoteWindow:
                 w, h = w0 + dw, h0 + dh
             if getattr(self, "_resize_solo", False):
                 w, h = self._follow_live(a0, b0, w, h)
-            self._set_geometry(self, f"{w}x{h}")
+            self._place(self, a0, b0, w, h)
             boxes = [(a0, b0, a0 + w, b0 + h)]
             self._now[self.pad.id] = boxes[0]
             for o, (l, t, r, b) in group:
@@ -2348,7 +2413,7 @@ class NoteWindow:
                     oh = max(px(MIN_H), oh)
                 if (ow, oh) != (r - l, b - t) or o._cover is not None:
                     o.freeze()                  # its size changes: a picture is redrawn, not its widgets
-                self._set_geometry(o, f"{ow}x{oh}+{x}+{y}")
+                self._place(o, x, y, ow, oh)
                 boxes.append((x, y, x + ow, y + (_shown_h(o.pad) if o.pad.collapsed else oh)))
                 self._now[o.pad.id] = (x, y, x + ow, y + oh)
             if group:
@@ -2406,7 +2471,7 @@ class NoteWindow:
                 self._live[nw] = s.box
                 still.add(nw)
                 self._now[sid] = nb
-                self._set_geometry(nw, f"+{nb[0]}+{nb[1]}")
+                self._place(nw, nb[0], nb[1])
             elif nb != s.box:
                 outlines.append(nb)
         for nw, start in list(self._live.items()):          # no longer pushed: back to where it was
@@ -2414,7 +2479,7 @@ class NoteWindow:
                 del self._live[nw]
                 self._now.pop(nw.pad.id, None)
                 if nw.win.winfo_exists():
-                    self._set_geometry(nw, f"+{start[0]}+{start[1]}")
+                    self._place(nw, start[0], start[1])
         if outlines:
             app.outlines().show(outlines)
         else:
@@ -2423,6 +2488,7 @@ class NoteWindow:
         return w, h
 
     def _drag_end(self, _event=None):
+        self._flush_gesture()               # (the last pointer, if its frame had not come yet)
         dropped = getattr(self, "_dropped", None) if self._drag else None   # (off the screen: back in)
         if dropped:                         # the pads take where the drag put them now: the windows'
             for w, (x, y) in dropped.items():   # <Configure> may come later, and the links made at the
@@ -2522,12 +2588,12 @@ class NoteWindow:
         in the corner. thaw() brings the widgets back (the text wraps to the new size then)."""
         if self._cover is not None or not self.win.winfo_ismapped():
             return
-        shot = winapi.snapshot(self.win)
+        shot = self.app.shots.shot(self)        # (taken ahead for linked notes: no wait at the first frame)
         if shot is None:
             return
-        w, h, data = shot
+        w, h = shot.size
         e = self.edge
-        img = Image.frombuffer("RGB", (w, h), data, "raw", "BGRX", 0, 1).crop((e, e, w - e, h - e))
+        img = shot.crop((e, e, w - e, h - e))
         fw, fh = img.size
         fx, fy = self.frame.winfo_rootx(), self.frame.winfo_rooty()
 
@@ -2572,15 +2638,29 @@ class NoteWindow:
         self._pack_frame()
         self._cover.destroy()
         self._cover = self._cover_photos = None
+        if getattr(self, "_sized_late", False):     # resized while frozen: laid out for its size now
+            self._sized_late = False
+            self._sized(self.pad.width)
 
     # ---- folding up to the top bar --------------------------------------------------
     def collapsed_height(self):
         """A folded note is its date row: DATE_ROW_H, its edge included (= PILE_STEP)."""
         return self.app.px(DATE_ROW_H)
 
-    def _apply_collapsed(self):
-        """Show the folded / unfolded state (pad.collapsed) without moving other notes."""
+    def _apply_collapsed(self, shoot=False):
+        """Show the folded / unfolded state (pad.collapsed) without moving other notes. ``shoot``:
+        a fold of a note that shows (not one built folded) first takes its picture, as it is
+        painted, for the unfold to roll."""
         p = self.pad
+        if p.collapsed and shoot:
+            try:
+                painted = (self.win.winfo_ismapped() and self.win.state() == "normal" and self._cover is None
+                           and getattr(self, "_rolling_cover", None) is None
+                           and self.win.winfo_height() == p.height)
+            except tk.TclError:
+                painted = False
+            if painted:
+                self.app.shots.fresh(self)
         if p.collapsed:
             self.hide_hints()
             self.hide_undo()
@@ -2608,7 +2688,7 @@ class NoteWindow:
             return
         if self.app.prefs.auto_layout and not p.free:    # the tiles close up / make room
             p.collapsed = not p.collapsed
-            self._apply_collapsed()
+            self._apply_collapsed(shoot=True)
             self.app.request_save()
             self.app.arrange_soon()
             return
@@ -2644,7 +2724,7 @@ class NoteWindow:
         its top bar to its height. A note the plan moves (not enough room under it) just opens."""
         p, win = self.pad, self.win
         bar = win.winfo_height()
-        img = self._kept_shot(p.height)
+        img = self._kept_shot(p.height)         # taken as it showed, when it folded (none: the widgets roll)
         self.rolling = True
         self._roll_cover(img)
         self._roll_geometry(bar)                # (with the picture: only the bar shows, whatever comes)
@@ -2720,11 +2800,15 @@ class NoteWindow:
             return
         resized = (geo[2], geo[3]) != (p.width, p.height)
         p.x, p.y, p.width, p.height = geo
-        self.app.request_save()
-        if self.calendar:
+        if not self.app.moving:             # (a drag or resize saves once, when it lets go)
+            self.app.request_save()
+        if self.calendar:                   # a docked calendar follows its note, also mid-drag
             self.calendar.place()
         if resized:
-            self._sized(geo[2])
+            if self._cover is not None:     # a picture stands in: laid out once, when thawed
+                self._sized_late = True
+            else:
+                self._sized(geo[2])
 
     def _sized(self, width):
         """Its size changed (resized, or a glide got there): the date fits again, and the grab

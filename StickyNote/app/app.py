@@ -55,6 +55,7 @@ from geom import Box, Screen
 from icon import draw_icon
 from links import Links, links_from_touching
 from motion import Motion, Outlines
+from shots import ShotCache
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
                    PIN_LIMIT_MAX, SNAP_GAPS, SOLID_COLORS, STYLES, TIDY_ORDERS, Note, NoteStore, Pad, Prefs)
 from texts import tr
@@ -100,6 +101,7 @@ class App:
         self.store = NoteStore(folder)
         self.root = root or tk.Tk()
         self.clock = anim.install(self.root)        # the one frame clock every animation runs on
+        self.shots = ShotCache(self)                # stand-in pictures of the notes (rolls, covers, fly)
         self.root.withdraw()
         self.root.title(APP_NAME)
         self.root.report_callback_exception = self._report_error
@@ -1952,7 +1954,7 @@ class App:
         if self.prefs.auto_layout:
             for w in wins:
                 w.pad.collapsed = on
-                w._apply_collapsed()
+                w._apply_collapsed(shoot=True)
             self.arrange()
         else:
             self.set_folded(wins, on)
@@ -1969,7 +1971,7 @@ class App:
         by_id = {s.id: s for s in old}
         for w in wins:
             w.pad.collapsed = on
-            w._apply_collapsed()
+            w._apply_collapsed(shoot=True)
         changes, parts = {}, {}
         for w in wins:
             note, s = _pad_box(w.pad), by_id.get(w.pad.id)

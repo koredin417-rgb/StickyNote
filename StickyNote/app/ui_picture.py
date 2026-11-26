@@ -128,6 +128,7 @@ class ImageViewer:
 
     def render(self, follow=False):
         """Redraw for the memo's pictures and the window's current size."""
+        self.nw.bump_look()
         names = self.nw.note.images
         if not names:
             self.reset()
@@ -184,6 +185,9 @@ class ImageViewer:
         self.canvas.create_text(kx + kw / 2, h / 2, text=key, fill=c.muted, font=font, tags="hint")
 
     def _draw_picture(self, fade_from=None):
+        if self._source is None:            # (gone meanwhile: reset, release)
+            return
+        self.nw.bump_look()
         pil = self._source[1]
         vw, vh = self._view
         if self.zoom == 1:
@@ -234,6 +238,7 @@ class ImageViewer:
     def _set_hover(self, side):
         if side != self._hover:
             self._hover = side
+            self.nw.bump_look()
             if self._base is not None:
                 self._show()
 
@@ -284,7 +289,11 @@ class ImageViewer:
         s = self._fit * zoom
         self.offset = (sx - x / s, sy - y / s)    # keep that pixel under the pointer
         self._clamp()
-        self._draw_picture()
+        self._draw_soon()
+
+    def _draw_soon(self):
+        """Pan / zoom: drawn once at the next display frame, however many moves came before it."""
+        self.nw.app.clock.request(self._draw_picture)
 
     def fit(self):
         if self.has_picture and self.zoom != 1:
@@ -317,7 +326,7 @@ class ImageViewer:
             s = self._fit * self.zoom
             self.offset = (ox - (event.x - x0) / s, oy - (event.y - y0) / s)
             self._clamp()
-            self._draw_picture()
+            self._draw_soon()
 
     def _release(self, event):
         self._pan = None

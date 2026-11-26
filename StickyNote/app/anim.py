@@ -149,6 +149,14 @@ class FrameClock:
         self._requests[fn] = None
         self._wake()
 
+    def take(self, fn) -> bool:
+        """Take back ``fn`` asked for the next frame: True if it was waiting (the caller runs it now)."""
+        return self._requests.pop(fn, 0) is None
+
+    def flush_moves(self) -> None:
+        """Do the window moves queued for this frame now (a gesture let go before the frame)."""
+        self._flush(time.perf_counter())
+
     def animate(self, owner, key: str, ms: int, step, done=None, ease=ease_out) -> None:
         """``step(ease(t))`` once a frame for ``ms``, t from 0 to 1, then ``done()``. The same
         (owner, key) again replaces the running one (its done is not called). A TclError from
