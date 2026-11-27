@@ -56,11 +56,12 @@ class _Item:
     ``now`` is the box it was last put at. ``sized``: a note's size changes on the way (it is
     frozen); for CAL, its size was changed at the start (only its place glides). ``pad``: a
     note's Pad (it outlives its window: set_language, closing)."""
-    __slots__ = ("id", "start", "end", "now", "t0", "ms", "sized", "pad")
+    __slots__ = ("id", "start", "end", "now", "t0", "ms", "sized", "pad", "vel")
 
     def __init__(self, item_id, start, end, t0, ms, sized, pad=None):
         self.id, self.start, self.end, self.now = item_id, start, end, start
         self.t0, self.ms, self.sized, self.pad = t0, ms, sized, pad
+        self.vel = None                         # (vx, vy) px/s it starts at: a thrown note (B8)
 
 
 class Motion:
@@ -149,7 +150,7 @@ class Motion:
         return x, y, x + w, y + h
 
     # ---- running a plan --------------------------------------------------------------------
-    def run(self, targets, ms=None, done=None, starts=None) -> None:
+    def run(self, targets, ms=None, done=None, starts=None, velocity=None) -> None:
         """Glide every id in ``targets`` (pad ids or CAL -> boxes) to its box, on the one
         clock: each for anim.glide_ms of how far it goes (B7), or all for ``ms``. ``starts``: an id's start top-left when its window is not where it is now (a
         new note sliding out from behind its parent). A note's docked calendar not in
@@ -230,6 +231,8 @@ class Motion:
             else:
                 item_ms = ms
             item = self._items[pid] = _Item(pid, start, end, t0, item_ms, sized, pad)
+            if velocity and old is None:        # (one already gliding keeps its own speed)
+                item.vel = velocity.get(pid)
             new.append(item)
         for item in sorted(new, key=lambda i: i.id == CAL):     # (notes first: CAL's offset is from its note)
             self._begin(item, item.id in superseded, item.id in starts)
@@ -274,7 +277,7 @@ class Motion:
             if cal is not None:
                 cal._xy = (b[0], b[1])
         self.app.clock.glide(win, item.end, item.ms, frm=item.start, sized=item.sized and item.id != CAL,
-                             write_extra=extra, done=lambda item=item: self._got_there(item))
+                             write_extra=extra, done=lambda item=item: self._got_there(item), velocity=item.vel)
 
     def _crossfade(self, item, win, cal):
         """Animations: Reduced: the window fades out, jumps to its box, fades back. It runs on the

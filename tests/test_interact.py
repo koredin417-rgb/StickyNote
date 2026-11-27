@@ -560,5 +560,92 @@ class BatchTest(unittest.TestCase):
         self.assertEqual((cal.top.winfo_rootx(), cal.top.winfo_rooty()), tuple(cal.target_box[:2]))
 
 
+
+class SnapEaseTest(unittest.TestCase):
+    """Phase 8, B8: the magnet's pull eases in (90 % in 65 ms) instead of jumping up to 24 px in one
+    frame; it finishes on its own frames when the pointer stops; a drop lands exactly on the snap."""
+    setUp, tearDown, settle = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle
+
+    def two_apart(self):
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        p = a.pad
+        bx = p.x + p.width + 200
+        self.app.apply({b.pad.id: (bx, p.y, bx + b.pad.width, p.y + b.pad.height)})
+        self.settle()
+        self.assertNotIn(b.pad.id, self.app.group_of(a.pad.id))
+        return a, b, bx - self.app._gap() - p.width            # where the magnet puts a, beside b
+
+    def drive(self, a):
+        """Record each frame's queued x for a's window."""
+        xs, clock = [], self.app.clock
+        real = clock.move
+
+        def move(win, x, y, w=None, h=None):
+            if win is a.win:
+                xs.append(x)
+            return real(win, x, y, w, h)
+        return xs, patched(clock, "move", move)
+
+    def next_frame(self, xs):
+        n = len(xs)
+        pump(self.app, lambda: len(xs) > n, timeout=0.2)
+
+    def engage(self, a, xs, sx):
+        """Drag a toward b, 4 px a frame, to the first frame the magnet reaches across x."""
+        from ui_common import SNAP_REACH
+        x0, y, p0 = a.pad.x + 60, a.pad.y + 10, a.pad.x
+        reach = self.app.px(SNAP_REACH)
+        a._drag_start(ev(x0, y))
+        for k in range(1, 80):
+            a._drag_move(ev(x0 + 4 * k, y))
+            self.next_frame(xs)
+            if sx - (p0 + 4 * k) <= reach:
+                return x0 + 4 * k, y, p0 + 4 * k             # pointer, and where it alone puts a
+        self.fail("never snapped")
+
+    def test_release_velocity(self):
+        a = self.nw
+        self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.05, 50, 0)]), (1000.0, 0.0))
+        self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.02, 20, 0)]), (0.0, 0.0))
+
+    def test_snap_eases_in(self):
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            self.assertNotEqual(raw, sx)
+            self.assertTrue(min(raw, sx) < xs[-1] < max(raw, sx), (raw, xs[-1], sx))   # part of the way
+            for _ in range(8):                      # (24 px on a 28 ms lag: under half a px after ~108 ms)
+                self.next_frame(xs)
+            self.assertEqual(xs[-1], sx)
+            a._drag_end(ev(px_, py_))
+        self.settle()
+
+    def test_snap_eases_with_still_pointer(self):
+        import time
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            pump(self.app, lambda: xs[-1] == sx, timeout=0.3)      # no more pointer events
+            self.assertEqual(xs[-1], sx)
+            t = time.perf_counter()
+            pump(self.app, lambda: not self.app.clock.busy, timeout=0.5)
+            self.assertLess(time.perf_counter() - t, 0.3)
+            a._drag_end(ev(px_, py_))
+        self.settle()
+
+    def test_drop_lands_on_snap(self):
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            a._drag_end(ev(px_, py_))                               # let go mid-ease
+        self.settle()
+        self.assertEqual((a.pad.x, a.win.winfo_rootx()), (sx, sx))
+
+
 if __name__ == "__main__":
     unittest.main()

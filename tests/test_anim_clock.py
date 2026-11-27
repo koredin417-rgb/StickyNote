@@ -194,6 +194,19 @@ class FirstFrameTest(unittest.TestCase):
         self.assertTrue(self.clock.fine_timer_held)
 
 
+class VelocityTest(unittest.TestCase):
+    """Phase 8, B8: a tween can start at a given speed (a thrown note's drop glide)."""
+    setUp, tearDown = ClockTest.setUp, ClockTest.tearDown
+
+    def test_tween_velocity_start_slope(self):
+        rw = dict(read=lambda: 0.0, write=lambda v: None)
+        self.clock.tween(self.root, "c", 100.0, 200, frm=0.0, velocity=(1000.0,), **rw)
+        self.assertEqual(self.clock._anims[(id(self.root), "c")].m[0], anim.start_slope(0, 100, 1000, 0.2))
+        self.assertEqual(self.clock._anims[(id(self.root), "c")].m[0], 200)
+        self.clock.tween(self.root, "d", 100.0, 200, frm=0.0, **rw)
+        self.assertEqual(self.clock._anims[(id(self.root), "d")].m[0], 300)
+
+
 class HalfRateTest(unittest.TestCase):
     """B2: every second vblank only under sustained load: the median of the last 6 ticks' work,
     entering above 0.8 x period and leaving below 0.55 x; done callbacks and an animation's

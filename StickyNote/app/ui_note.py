@@ -2146,6 +2146,8 @@ class NoteWindow:
         for w in self.app.group_windows(self.pad.id):
             w.stop_glide()
         self._snap_id = self._snap_hold = None
+        self._snap_off, self._snap_at, self._snap_done = (0.0, 0.0), None, False     # (B8: _ease_snap)
+        self._throw = [(time.perf_counter(), event.x_root, event.y_root)]          # (B8: _release_velocity)
         self._drag = (event.x_root - self.win.winfo_rootx(), event.y_root - self.win.winfo_rooty())
         self._pointer = None
         self._drag_from, self._drag_alt = (self.pad.x, self.pad.y), bool(event.state & 0x20000)
@@ -2345,16 +2347,60 @@ class NoteWindow:
         """The pointer moved: noted, and applied once at the next display frame (_apply_drag)."""
         if self._drag:
             self._pointer = (event.x_root, event.y_root, event.state)
+            now = time.perf_counter()
+            throw = getattr(self, "_throw", [])
+            throw.append((now, event.x_root, event.y_root))
+            while len(throw) > 2 and now - throw[0][0] > THROW_WINDOW_S:
+                throw.pop(0)
+            self._throw = throw
             self.app.clock.request(self._apply_drag)
 
     def _flush_gesture(self):
         """Let go before the next frame came: the last pointer is applied now, and its window moves
-        are done (the drop reads where they are)."""
+        are done (the drop reads where they are). A snap still easing in lands there now (B8)."""
         clock = self.app.clock
         for fn in (self._apply_drag, self._apply_resize):
             if clock.take(fn):
                 fn()
+        if self._drag and getattr(self, "_pointer", None) is not None and self._snap_off != (0.0, 0.0):
+            self._snap_done = True
+            self._apply_drag()
         clock.flush_moves()
+
+    def _ease_snap(self, raw, target):
+        """B8: where the drag shows the note, the magnet's pull eased. The offset from where the
+        pointer puts it (``raw``) to the snapped spot (``target``) follows on a first-order lag
+        (SNAP_TAU_S: 90 % in 65 ms, no overshoot), so a snap glides in, and out when it lets go.
+        While it is on its way it asks for the next frame itself (the pointer may be still)."""
+        now = time.perf_counter()
+        want = (float(target[0] - raw[0]), float(target[1] - raw[1]))
+        off, at = self._snap_off, self._snap_at
+        if self._snap_done:
+            off = want
+        else:
+            dt = (now - at) if at is not None else self.app.clock._period()
+            k = math.exp(-max(0.0, dt) / SNAP_TAU_S)
+            off = tuple(w + (o - w) * k for o, w in zip(off, want))
+            if all(abs(o - w) < 0.5 for o, w in zip(off, want)):
+                off = want
+        self._snap_off, self._snap_at = off, now
+        if off != want:
+            self.app.clock.request(self._apply_drag)
+        return raw[0] + round(off[0]), raw[1] + round(off[1])
+
+    def _release_velocity(self, samples=None):
+        """The pointer's speed at the release (px/s): over its last THROW_WINDOW_S; none when that
+        is shorter than THROW_MIN_S (a still hand, or a click)."""
+        samples = list(getattr(self, "_throw", []) if samples is None else samples)
+        if len(samples) < 2:
+            return 0.0, 0.0
+        t1, x1, y1 = samples[-1]
+        first = next((s for s in samples if t1 - s[0] <= THROW_WINDOW_S + 1e-9), samples[0])
+        t0, x0, y0 = first
+        span = t1 - t0
+        if span < THROW_MIN_S:
+            return 0.0, 0.0
+        return (x1 - x0) / span, (y1 - y0) / span
 
     @perf.timed("drag_move")
     def _apply_drag(self):
@@ -2368,8 +2414,11 @@ class NoteWindow:
         group = getattr(self, "_group", [])
         self._snap_id = None
         self._drag_pt = (px_, py_)
+        raw = (x, y)
         if not state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
             x, y = self._snapped(x, y, group)
+        if getattr(self, "_snap_off", None) is not None:
+            x, y = self._ease_snap(raw, (x, y))   # (the pull eases in and out: B8)
         clock = self.app.clock
         clock.move(self.win, x, y)
         self._dropped = {self: (x, y)}              # where the drag put each (winfo_rootx can lag behind)
@@ -2637,7 +2686,8 @@ class NoteWindow:
                 for w in places:
                     w.pad.stacked = False
             ids = {w.pad.id for w in places} | ({CAL} if along is not None else set())   # (it came along)
-            self.app.settle_drop(ids, places=places, anchor=self)
+            throw = self._release_velocity() if was_drag else None
+            self.app.settle_drop(ids, places=places, anchor=self, velocity=throw if throw and any(throw) else None)
         if resized and not plain_members and self.app.layout_of([w.pad.id for w in members]) != before:  # Undo (after any bring_back, an apply); the first time also how to avoid it
             prefs = self.app.prefs
             label = "resized_together" if prefs.resize_hint_seen else "resized_alt_hint"

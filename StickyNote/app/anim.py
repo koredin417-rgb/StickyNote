@@ -213,11 +213,12 @@ class FrameClock:
         self._wake()
 
     def tween(self, owner, channel: str, to, ms: int, *, read, write, ease=ease_out, frm=None,
-              done=None, kind: str | None = None) -> None:
+              done=None, kind: str | None = None, velocity: tuple | None = None) -> None:
         """Move a value (a float or a tuple of floats) to ``to`` over ``ms``. If (owner, channel)
         is moving already it turns toward ``to`` from where it is, keeping its speed (no snap).
         ``kind``: "fade" or "move" (default: "alpha" is a fade, every other channel a move); an
-        instant one (_instant) is written at once, its done at the next frame."""
+        instant one (_instant) is written at once, its done at the next frame. ``velocity`` (per
+        component, value per second): a value not moving yet starts at that speed (a throw, B8)."""
         k = (id(owner), channel)
         now = time.perf_counter()
         scalar = not isinstance(to, (tuple, list))
@@ -238,6 +239,8 @@ class FrameClock:
         else:
             cur = read()
             v0 = (float(cur),) if scalar else tuple(float(v) for v in cur)
+        if vel is None and velocity is not None:
+            vel = tuple(float(v) for v in velocity)
         a = _Anim(owner, channel, None, ms, ease, done)   # (its clock starts at its first frame: _tick)
         a.tween, a.scalar, a.v0, a.v1, a.write = True, scalar, v0, v1, write
         if ease is ease_out:
@@ -435,9 +438,10 @@ class FrameClock:
             return None
 
     def glide(self, win, to, ms: int, *, frm=None, done=None, sized: bool = False, write_extra=None,
-              ease=ease_out) -> None:
+              ease=ease_out, velocity: tuple | None = None) -> None:
         """Glide ``win`` to the box ``to`` (x0, y0, x1, y1): a tween on its "box" channel, so a
-        later glide turns from where it is. ``sized``: its size changes on the way too."""
+        later glide turns from where it is. ``sized``: its size changes on the way too.
+        ``velocity`` (vx, vy) px/s: it starts moving at that speed (a thrown note, B8)."""
         def read():                         # (only when no glide runs: where the window really is)
             x, y = win.winfo_rootx(), win.winfo_rooty()
             return x, y, x + win.winfo_width(), y + win.winfo_height()
@@ -451,7 +455,8 @@ class FrameClock:
                 self.move(win, b[0], b[1])
             if write_extra is not None:
                 write_extra(b)
-        self.tween(win, "box", tuple(to), ms, read=read, write=write, ease=ease, frm=frm, done=done)
+        vel = None if velocity is None else (velocity[0], velocity[1], velocity[0], velocity[1])
+        self.tween(win, "box", tuple(to), ms, read=read, write=write, ease=ease, frm=frm, done=done, velocity=vel)
 
     def _flush(self, now: float) -> None:
         """Apply the frame's window moves: one DeferWindowPos for all of them (BATCH_MOVES),
