@@ -8,7 +8,9 @@ Notes live in %APPDATA%\\StickyNote and are never touched.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +28,8 @@ QUIT_SIGNAL = "quit.signal"         # for an older app (it polls for it); a newe
 PARTS = ("runtime", "app", "licenses")
 BACKUP_DIR = ".update-backup"           # under the install folder: the old files while an install runs
 JOURNAL = "journal.txt"                 # in it: what was changed, one line per file (_Swap)
+RESULT_FILE = "update-result.json"      # in the data folder, after --yes: what the app shows when it starts
+NO_WINDOW = subprocess.CREATE_NO_WINDOW     # helpers (powershell, taskkill): the update's installer has no console
 LINK_NAME = "스티키 노트.lnk"
 HERE = Path(__file__).resolve().parent
 
@@ -36,6 +40,19 @@ class InstallError(Exception):
 
 def default_dest() -> Path:
     return Path(os.environ["LOCALAPPDATA"]) / "Programs" / "StickyNote"
+
+
+def read_version(text: str) -> str | None:
+    """The VERSION = "..." of a version.py's text (read, not imported: it may be another build's)."""
+    m = re.search(r"""^VERSION\s*=\s*["']([^"']+)["']""", text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def version_of(source: Path) -> str:
+    try:
+        return read_version((Path(source) / "app" / "version.py").read_text(encoding="utf-8")) or ""
+    except OSError:
+        return ""
 
 
 def default_link_dirs() -> list[Path]:
@@ -284,7 +301,8 @@ def _app_processes(dest: Path) -> list[int]:
              "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe' OR "
              f"Name='{EXE_NAME}'\" | "
              "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     pids = []
@@ -297,17 +315,19 @@ def _app_processes(dest: Path) -> list[int]:
     return pids
 
 
-def close_running(dest: Path) -> bool:
-    """A Sticky Note is running (perhaps on another monitor or behind other windows): ask, then
-    close it. It is asked first (quit.signal: it saves and closes); an older one that does not
-    know that signal is ended (it saves every change at once, so nothing is lost)."""
+def close_running(dest: Path, ask: bool = True) -> bool:
+    """A Sticky Note is running (perhaps on another monitor or behind other windows): ask (unless
+    the user already agreed: the in-app update), then close it. It is asked first ("quit": it
+    saves and closes); an older one that does not know that signal is ended (it saves every
+    change at once, so nothing is lost)."""
     print("스티키 노트가 실행 중입니다. (다른 모니터나 다른 창 뒤에 메모가 있을 수 있어요)")
-    try:
-        answer = input("닫고 설치할까요? [Y/n] ").strip().lower()
-    except (EOFError, OSError):
-        answer = "y"
-    if answer not in ("", "y", "yes", "ㅛ", "예", "네"):
-        return False
+    if ask:
+        try:
+            answer = input("닫고 설치할까요? [Y/n] ").strip().lower()
+        except (EOFError, OSError):
+            answer = "y"
+        if answer not in ("", "y", "yes", "ㅛ", "예", "네"):
+            return False
     folder = data_folder()
     import waker
     if not waker.send(folder / "wake.port", "quit"):     # the app saves and closes at once
@@ -319,7 +339,7 @@ def close_running(dest: Path) -> bool:
     print("스티키 노트를 닫는 중…")
     if not _wait_closed(4):
         for pid in _app_processes(dest):        # an older version: it does not read quit.signal
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, creationflags=NO_WINDOW)
     closed = _wait_closed(4)
     if closed:
         _wait_exited(dest, 10)                  # its files are let go only once the process is gone
@@ -358,7 +378,11 @@ def main(argv=None) -> int:
     parser.add_argument("--dest", type=Path, help="install folder (default: %%LOCALAPPDATA%%\\Programs\\StickyNote)")
     parser.add_argument("--link-dir", type=Path, action="append", help="folder for a shortcut (repeatable)")
     parser.add_argument("--no-launch", action="store_true", help="do not start the app afterwards")
+    parser.add_argument("--yes", action="store_true",
+                        help="the in-app update: no questions, the outcome in update-result.json")
     args = parser.parse_args(argv)
+    if args.yes:
+        return _quiet(args)
 
     print("스티키 노트 설치")
     dest = args.dest or default_dest()
@@ -377,6 +401,44 @@ def main(argv=None) -> int:
         launch(dest, links)
         print("스티키 노트를 시작합니다.")
     _pause(seconds=3)
+    return 0
+
+
+
+def _quiet(args) -> int:
+    """--yes: the in-app update runs this with no console (the user already chose Update now).
+    No question, no pause; every way out writes the result file the app shows at its next start,
+    and an app is running afterwards: the new version, or the old one put back."""
+    dest = args.dest or default_dest()
+    version = version_of(args.source)
+
+    def result(ok: bool, error: str = "") -> None:
+        folder = data_folder()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / RESULT_FILE).write_text(json.dumps({"version": version, "ok": ok, "error": error}),
+                                              encoding="utf-8")
+        except OSError:
+            pass
+
+    def start(links) -> None:
+        if not args.no_launch:
+            try:
+                launch(dest, links)
+            except OSError:
+                pass
+
+    try:
+        if winapi.instance_running(MUTEX_NAME) and not close_running(dest, ask=False):
+            result(False, "still running")      # (and it still is: nothing to start)
+            return 1
+        links = install(args.source, dest, args.link_dir or default_link_dirs())
+    except Exception as error:                  # (already put back by install)
+        result(False, str(error) or type(error).__name__)
+        start([])
+        return 1
+    result(True)
+    start(links)
     return 0
 
 
