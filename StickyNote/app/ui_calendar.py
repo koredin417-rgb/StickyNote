@@ -2201,7 +2201,7 @@ class CalendarPopup:
         self._draw_grip()
         self.detail_name.configure(fg=c.sunday)
         self.detail_text.configure(fg=c.fg)
-        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_more, self.btn_close):
+        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_size, self.btn_more, self.btn_close):
             b.recolor(c)
         self._draw_head(animated=False)
         self.draw()

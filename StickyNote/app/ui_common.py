@@ -57,7 +57,8 @@ ICON_BOX = 14                    # every bar icon is drawn this big (px at 100 %
 SMALL_ICON_BOX = 12              # icons inside the list
 SECTION_ICON_BOX = 9             # ▾ / ▸ and the sort icon beside the list's small part heads (8 pt text)
 BIN_ICON_BOX = 18                # the bin's icon under the memo list (px at 100 %)
-OPTICAL_SCALE = {GLYPH["minimize"]: 0.8, GLYPH["close"]: 0.8}   # they fill the box corners: draw smaller
+OPTICAL_SCALE = {GLYPH["minimize"]: 0.8, GLYPH["close"]: 0.8,    # they fill the box corners: draw smaller
+                 GLYPH["expand"]: 0.8, GLYPH["shrink"]: 0.8}
 UI_FONT = texts.UI_FONTS[texts.DEFAULT]    # changes with the language (Korean: Malgun Gothic)
 UI_BOLD = texts.UI_BOLD_FONTS[texts.DEFAULT]     # bold UI text: (UI_BOLD, size, "bold")
 
