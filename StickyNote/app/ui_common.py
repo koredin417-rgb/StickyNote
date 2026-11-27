@@ -129,6 +129,7 @@ CLOSE_FADE_MS = anim.FAST        # a closed note fades out (ease-in: it lets go,
 CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
 HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
+CAL_HEAD_BUTTON_W = 20           # the calendar head's buttons (px at 100 %): six of them fill what five of 24 did
 CAL_HOVER_IN_MS, CAL_HOVER_OUT_MS = anim.FAST, anim.BASE   # a day under the mouse fades in, the one left out ...
 CAL_HOVER_STEPS = 5              # ... through this many colours (a fixed ramp: no new picture per frame)
 MONTH_SLIDE_MS = anim.LONG       # paging months: the shown one slides out as the next slides in

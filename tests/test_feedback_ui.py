@@ -238,5 +238,54 @@ class WordingTest(FeedbackCase):
         self.assertEqual(buttons[0].cget("compound"), "left")
 
 
+
+class CalendarSizeTest(FeedbackCase):
+    """Calendar size (B + a button): double-click the calendar's head, or its expand button, toggles
+    small and big. Double-clicking a day still makes a new memo. The head keeps its width."""
+
+    def open(self):
+        self.nw.toggle_calendar()
+        self.settle()
+        return self.nw.calendar
+
+    def double_click(self, w, t0):
+        """Two clicks 100 ms apart (by the events' own time): Tk sees a double-click."""
+        for t in (t0, t0 + 100):
+            w.event_generate("<ButtonPress-1>", x=8, y=8, time=t)
+            w.event_generate("<ButtonRelease-1>", x=8, y=8, time=t + 30)
+
+    def test_head_double_click_toggles(self):
+        cal = self.open()
+        self.assertFalse(cal.expanded)
+        self.double_click(cal.head_cv, 10_000)
+        self.settle()
+        self.assertTrue(cal.expanded)
+        self.double_click(cal.head_cv, 20_000)
+        self.settle()
+        self.assertFalse(cal.expanded)
+        self.assertTrue(cal.btn_close.master.bind("<Double-Button-1>"))     # (the head's own frame too)
+
+    def test_size_button_toggles_and_shows_the_view(self):
+        import texts
+        from ui_common import GLYPH
+        cal = self.open()
+        b = cal.btn_size
+        self.assertEqual((b.glyph, b.tooltip.text), (GLYPH["expand"], texts.tr("menu_cal_big")))
+        b.event_generate("<ButtonPress-1>", x=4, y=4)
+        b.event_generate("<ButtonRelease-1>", x=4, y=4)
+        self.settle()
+        self.assertTrue(cal.expanded)
+        self.assertEqual((b.glyph, b.tooltip.text), (GLYPH["shrink"], texts.tr("menu_cal_small")))
+
+    def test_head_keeps_its_width(self):
+        cal = self.open()
+        head = cal.btn_close.master
+        px = self.app.px
+        buttons = (cal.btn_today, cal.btn_prev, cal.btn_next, cal.btn_size, cal.btn_more, cal.btn_close)
+        self.assertEqual({b.winfo_reqwidth() for b in buttons}, {px(20)})
+        self.assertLessEqual(head.winfo_reqwidth(), cal.least[0])       # (nothing in it is cut off)
+        self.assertEqual(head.winfo_reqwidth(), 6 * px(20) + cal.head_cv.winfo_reqwidth() + 2 * px(4))
+
+
 if __name__ == "__main__":
     unittest.main()

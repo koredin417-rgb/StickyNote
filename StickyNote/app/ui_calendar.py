@@ -202,12 +202,18 @@ class CalendarPopup:
         self.head_cv = tk.Canvas(head, width=self._head_w, height=self._head_h(), bd=0, highlightthickness=0)
         self.head_cv.pack(side="left", padx=(px(4), 0))
 
-        def top_button(glyph, command, tip):        # the same icons, size and height as before
-            return IconButton(head, self.app, glyph, command, tip, height=TOP_BUTTON_H)
+        def top_button(glyph, command, tip):        # the same icons and height as before; six of them take
+            return IconButton(head, self.app, glyph, command, tip, height=TOP_BUTTON_H,   # the width five did
+                              width=CAL_HEAD_BUTTON_W)
         self.btn_close = top_button(GLYPH["close"], lambda: self.nw.close_calendar(), tr("tip_close_calendar"))
         self.btn_close.pack(side="right", padx=(0, px(4)))
         self.btn_more = top_button(GLYPH["more"], self._more_menu, tr("tip_more"))
         self.btn_more.pack(side="right")
+        # small <-> big in one click (picked 2026-11-27, with the head's double-click): its icon and tip
+        # say what it does next (_show_size_button)
+        self.btn_size = top_button(GLYPH["expand"], self.toggle_expand, tr("menu_cal_big"))
+        self.btn_size.pack(side="right")
+        self._show_size_button()
         self.btn_next = top_button(GLYPH["next"], self.next_month, tr("tip_next_month"))
         self.btn_next.pack(side="right")
         self.btn_prev = top_button(GLYPH["prev"], self.prev_month, tr("tip_prev_month"))
@@ -217,6 +223,7 @@ class CalendarPopup:
         self.btn_today.pack(side="right")
         for w in (head, self.head_cv):
             w.configure(cursor="fleur")
+            w.bind("<Double-Button-1>", self._head_double)  # (a day's double-click still makes a memo)
             w.bind("<ButtonPress-1>", self._move_start)
             w.bind("<B1-Motion>", self._move_to)
             w.bind("<ButtonRelease-1>", self._move_end)
@@ -632,6 +639,7 @@ class CalendarPopup:
             pad.calendar_expanded = big
             return
         self.expanded = pad.calendar_expanded = big
+        self._show_size_button()
         self._sizes()
         self.detail_text.configure(wraplength=self.cell_w * 7)
         self._show_state()
@@ -979,6 +987,19 @@ class CalendarPopup:
                 side = "left" if cb[0] + cb[2] < nb[0] + nb[2] else "right"
                 best = (key, w, side)
         return (best[1], best[2]) if best else (self.nw, None)
+
+    def _head_double(self, _event=None):
+        """A double-click on the head (not on a day: that makes a memo) switches small <-> big."""
+        self.toggle_expand()
+        return "break"
+
+    def _show_size_button(self):
+        """The expand button shows what a click does next: big from small, small from big."""
+        b = getattr(self, "btn_size", None)
+        if b is not None:
+            big = getattr(self, "expanded", False)
+            b.set_glyph(GLYPH["shrink"] if big else GLYPH["expand"])
+            b.tooltip.text = tr("menu_cal_small" if big else "menu_cal_big")
 
     def toggle_expand(self):
         """The big month view with each day's memo titles, and back to the small one."""
