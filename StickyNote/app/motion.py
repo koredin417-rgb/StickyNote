@@ -233,6 +233,8 @@ class Motion:
             item = self._items[pid] = _Item(pid, start, end, t0, item_ms, sized, pad)
             if velocity and old is None:        # (one already gliding keeps its own speed)
                 item.vel = velocity.get(pid)
+                if item.vel is None and pid == CAL and cal is not None and cal.docked:
+                    item.vel = velocity.get(cal.nw.pad.id)      # (a docked calendar goes as its note goes)
             new.append(item)
         for item in sorted(new, key=lambda i: i.id == CAL):     # (notes first: CAL's offset is from its note)
             self._begin(item, item.id in superseded, item.id in starts)

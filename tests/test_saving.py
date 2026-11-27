@@ -97,6 +97,35 @@ class SaveSoonTest(unittest.TestCase):
         self.assertGreaterEqual(saves[0][0] - t0, 0.9)
         self.assertLess(saves[0][0] - t0, 1.6)
 
+    def two_notes(self):
+        saves, patch = self.record_saves()
+        b = self.app.new_window(from_window=self.nw)
+        pump(self.app, lambda: not self.app.clock.busy and not self.app.motion.busy(), timeout=2.0)
+        pump(self.app, timeout=1.2)                         # (its own save is done)
+        return b
+
+    def test_close_saves_after_fade(self):                  # (review: the save ran before the fade's first frame)
+        b = self.two_notes()
+        b.body.insert("1.0", "closing")
+        b.sync_from_widgets()
+        saves, patch = self.record_saves()
+        with patch:
+            self.app.close_window(b)
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertFalse(saves[0][1])
+
+    def test_trash_saves_after_flight(self):
+        nw = self.nw
+        nw.body.insert("1.0", "to the bin")
+        nw.sync_from_widgets()
+        pump(self.app, timeout=0.6)
+        self.app.save_now()
+        saves, patch = self.record_saves()
+        with patch:
+            nw.trash_note(nw.note)
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertFalse(saves[0][1])
+
     def test_quit_right_after_new_note_keeps_it(self):
         nw = self.app.new_window(from_window=self.nw)
         nw.body.insert("1.0", "keep me")

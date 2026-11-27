@@ -385,6 +385,22 @@ class GroupResizeClipTest(unittest.TestCase):
         self.assertEqual(calls.count(True), len(frozen))
         self.assertEqual(calls[-1], True)
 
+    def test_thaw_shrinks_before_region_clears(self):     # (review: geometry() waits for idle; the region went at once)
+        import ctypes
+        from ctypes import wintypes
+        a, others, frozen, x, y = self.start()
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        for o in frozen:
+            clip = o._clip
+            o.thaw()
+            r = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(wintypes.HWND(winapi.hwnd_of(o.win)), ctypes.byref(r))
+            self.assertEqual((r.left, r.top, r.right - r.left, r.bottom - r.top), tuple(clip), o.pad.id)
+        a._drag_end(ev(x - 20, y - 20))
+        self.settle()
+
     def test_group_resize_release_exact(self):
         a, b, c = self.group_of_three()
         c.toggle_collapse(instant=True)             # a folded member keeps its folded height
@@ -450,6 +466,39 @@ class OverlapTest(unittest.TestCase):
         self.assertTrue(a.pad.collapsed)
         self.assertEqual(a.win.winfo_height(), a.collapsed_height())
         self.assertEqual(b.pad.y, a.pad.y + a.collapsed_height() + self.app._gap())
+
+    def test_roll_cover_drop_shrinks_before_region_clears(self):   # (the same order as thaw: review #5)
+        import ctypes
+        from ctypes import wintypes
+        a = self.nw
+        bar = a.collapsed_height()
+        a._roll_cover(a._shot())
+        a._roll_geometry(bar)
+        self.app.root.update_idletasks()
+        a._drop_roll_cover(bar)
+        r = wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(wintypes.HWND(winapi.hwnd_of(a.win)), ctypes.byref(r))
+        self.assertEqual(r.bottom - r.top, bar)
+        a._drop_roll_cover(a.pad.height)
+        a.win.geometry(f"{a.pad.width}x{a.pad.height}")
+        self.settle()
+
+    def test_fold_keeps_calendar_below_until_rolled(self):    # (review: it jumped up over the rolling note)
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        cal = a.calendar
+        a.pad.calendar_side = "below"
+        cal.place()
+        self.settle()
+        y0 = cal.top.winfo_rooty()
+        self.assertGreaterEqual(y0, a.pad.y + a.pad.height)
+        a.toggle_collapse()
+        self.app.root.update_idletasks()
+        self.assertEqual(cal.top.winfo_rooty(), y0)         # no jump at the start of the roll
+        self.fine_pump(lambda: not a.rolling and not self.app.motion.busy(), 1.0)
+        self.settle()
+        self.assertLess(cal.top.winfo_rooty(), y0)          # under the folded bar once it has rolled
 
     def test_minimize_one_curve(self):
         import time
@@ -609,6 +658,45 @@ class SnapEaseTest(unittest.TestCase):
         a = self.nw
         self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.05, 50, 0)]), (1000.0, 0.0))
         self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.02, 20, 0)]), (0.0, 0.0))
+
+    def test_release_velocity_after_pause(self):    # (review: a still hand before the release is no throw)
+        a = self.nw
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y, ALT))
+        for k in range(1, 6):
+            a._drag_move(ev(x + 30 * k, y, ALT))
+            pump(self.app, timeout=0.016)
+        pump(self.app, timeout=0.2)                         # held still
+        self.assertEqual(a._release_velocity(), (0.0, 0.0))
+        a._drag_end(ev(x + 150, y, ALT))
+        self.settle()
+
+    def test_held_snap_holds_still(self):           # (review: the pointer's own motion fed the lag)
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            pump(self.app, lambda: xs[-1] == sx, timeout=0.3)
+            self.assertEqual(xs[-1], sx)
+            for k in range(1, 6):                       # the hand moves on, within the hold
+                a._drag_move(ev(px_ + 2 * k, py_))
+                self.next_frame(xs)
+                self.assertEqual(xs[-1], sx, xs[-6:])
+            a._drag_end(ev(px_ + 10, py_))
+        self.settle()
+
+    def test_thrown_drop_carries_docked_calendar(self):     # (review: the calendar started from rest)
+        from geom import CAL
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        self.assertTrue(a.calendar.docked)
+        self.app.settle_drop({a.pad.id}, places={a: (a.pad.x, 1040 - 150)}, anchor=a, velocity=(0.0, 1500.0))
+        items = self.app.motion._items
+        self.assertIn(CAL, items)
+        self.assertEqual(items[a.pad.id].vel, (0.0, 1500.0))
+        self.assertEqual(items[CAL].vel, (0.0, 1500.0))
+        self.settle()
 
     def test_snap_eases_in(self):
         a, b, sx = self.two_apart()

@@ -266,8 +266,8 @@ class FrameClock:
         if self.busy:
             self._quiet_fns.append(fn)
             return
-        try:
-            self.root.after_idle(fn)
+        try:                                        # (looked at again at idle: the caller may start
+            self.root.after_idle(lambda: self._quiet_fns.append(fn) if self.busy else fn())   # its motion after)
         except tk.TclError:
             pass
 

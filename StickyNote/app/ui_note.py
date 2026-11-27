@@ -1085,12 +1085,23 @@ class NoteWindow:
         self._rolling_cover = None
         if height is not None:
             p = self.pad
-            self.win.geometry(f"{p.width}x{round(height)}+{p.x}+{p.y}")
+            self._size_now(p.x, p.y, p.width, round(height))
         if getattr(self, "_roll_geo", None) is not None:
             winapi.clip_height(self.win)
             self._roll_geo = None
         self._pack_frame()
         cover.destroy()
+
+    def _size_now(self, x, y, w, h):
+        """The window exactly (x, y, w, h) now, not at Tk's next idle as geometry() does: a window
+        region about to go must never show the window bigger than this, even for a frame."""
+        hwnd = winapi.hwnd_of(self.win)
+        try:
+            if hwnd and self.win.winfo_ismapped():
+                winapi.defer_move([(hwnd, int(x), int(y), int(w), int(h))])
+            self.win.geometry(f"{int(w)}x{int(h)}+{int(x)}+{int(y)}")    # (Tk's own record of it)
+        except tk.TclError:
+            pass
 
     def minimize_button(self):
         """The minimize button. "Top bar only" (Settings): an open note folds up to its top bar
@@ -2146,7 +2157,8 @@ class NoteWindow:
         for w in self.app.group_windows(self.pad.id):
             w.stop_glide()
         self._snap_id = self._snap_hold = None
-        self._snap_off, self._snap_at, self._snap_done = (0.0, 0.0), None, False     # (B8: _ease_snap)
+        self._snap_res, self._snap_mode, self._snap_at, self._snap_done = (0.0, 0.0), (None, None), None, False
+        self._snap_shown = (self.pad.x, self.pad.y)                                 # (B8: _ease_snap)
         self._throw = [(time.perf_counter(), event.x_root, event.y_root)]          # (B8: _release_velocity)
         self._drag = (event.x_root - self.win.winfo_rootx(), event.y_root - self.win.winfo_rooty())
         self._pointer = None
@@ -2362,36 +2374,50 @@ class NoteWindow:
         for fn in (self._apply_drag, self._apply_resize):
             if clock.take(fn):
                 fn()
-        if self._drag and getattr(self, "_pointer", None) is not None and self._snap_off != (0.0, 0.0):
+        if self._drag and getattr(self, "_pointer", None) is not None and any(getattr(self, "_snap_res", ())):
             self._snap_done = True
             self._apply_drag()
         clock.flush_moves()
 
     def _ease_snap(self, raw, target):
-        """B8: where the drag shows the note, the magnet's pull eased. The offset from where the
-        pointer puts it (``raw``) to the snapped spot (``target``) follows on a first-order lag
-        (SNAP_TAU_S: 90 % in 65 ms, no overshoot), so a snap glides in, and out when it lets go.
-        While it is on its way it asks for the next frame itself (the pointer may be still)."""
+        """B8: where the drag shows the note, the magnet's changes eased. ``target`` is where the
+        pointer puts it (``raw``), snapped. On an axis whose snap changes (it engages, lets go,
+        or lines up with something else) the note goes on from where it showed, and the rest
+        (shown - target) eases away on a first-order lag (SNAP_TAU_S: 90 % in 65 ms, no
+        overshoot). The pointer's own motion is never lagged: a free drag follows it exactly and
+        a held snap holds still. While a rest is left it asks for the next frame itself (the
+        pointer may be still); let go, the rest goes at once (_snap_done)."""
         now = time.perf_counter()
-        want = (float(target[0] - raw[0]), float(target[1] - raw[1]))
-        off, at = self._snap_off, self._snap_at
         if self._snap_done:
-            off = want
+            self._snap_res = (0.0, 0.0)
         else:
-            dt = (now - at) if at is not None else self.app.clock._period()
-            k = math.exp(-max(0.0, dt) / SNAP_TAU_S)
-            off = tuple(w + (o - w) * k for o, w in zip(off, want))
-            if all(abs(o - w) < 0.5 for o, w in zip(off, want)):
-                off = want
-        self._snap_off, self._snap_at = off, now
-        if off != want:
+            at, prev = self._snap_at, self._snap_shown
+            k = math.exp(-max(0.0, (now - at) if at is not None else self.app.clock._period()) / SNAP_TAU_S)
+            res, modes = [], []
+            for i in (0, 1):
+                mode = target[i] if target[i] != raw[i] else None      # (snapped on this axis, to there)
+                r = self._snap_res[i]
+                if mode != self._snap_mode[i] and prev is not None:
+                    r = float(prev[i] - target[i])          # (on from where it showed)
+                r *= k
+                res.append(0.0 if abs(r) < 0.5 else r)
+                modes.append(mode)
+            self._snap_res, self._snap_mode = tuple(res), tuple(modes)
+        self._snap_at = now
+        shown = (target[0] + round(self._snap_res[0]), target[1] + round(self._snap_res[1]))
+        self._snap_shown = shown
+        if any(self._snap_res):
             self.app.clock.request(self._apply_drag)
-        return raw[0] + round(off[0]), raw[1] + round(off[1])
+        return shown
 
     def _release_velocity(self, samples=None):
         """The pointer's speed at the release (px/s): over its last THROW_WINDOW_S; none when that
         is shorter than THROW_MIN_S (a still hand, or a click)."""
-        samples = list(getattr(self, "_throw", []) if samples is None else samples)
+        if samples is None:                 # (now, where it last was: a hand held still is no throw)
+            samples = list(getattr(self, "_throw", []))
+            if samples:
+                samples.append((time.perf_counter(),) + tuple(samples[-1][1:]))
+        samples = list(samples)
         if len(samples) < 2:
             return 0.0, 0.0
         t1, x1, y1 = samples[-1]
@@ -2417,8 +2443,8 @@ class NoteWindow:
         raw = (x, y)
         if not state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
             x, y = self._snapped(x, y, group)
-        if getattr(self, "_snap_off", None) is not None:
-            x, y = self._ease_snap(raw, (x, y))   # (the pull eases in and out: B8)
+        if getattr(self, "_snap_res", None) is not None:
+            x, y = self._ease_snap(raw, (x, y))   # (a snap eases in and out: B8)
         clock = self.app.clock
         clock.move(self.win, x, y)
         self._dropped = {self: (x, y)}              # where the drag put each (winfo_rootx can lag behind)
@@ -2797,7 +2823,7 @@ class NoteWindow:
         clip, self._clip, self._clip_real = self._clip, None, None
         if clip is not None:                    # the window that box again, then no region (the
             x, y, w, h = clip                   # region last: it never shows the big window)
-            self.win.geometry(f"{w}x{h}+{x}+{y}")
+            self._size_now(x, y, w, h)
             winapi.clip_height(self.win)
         self._pack_frame()
         self._cover.destroy()
@@ -2843,7 +2869,7 @@ class NoteWindow:
                 self.win.geometry(f"{p.width}x{p.height}")
         self.app.space_changed()            # folded: as tall as its date row
         self._arrange_chrome(p.width)
-        if self.calendar:
+        if self.calendar and geometry:          # (rolling: placed when the roll ends, not over it)
             self.calendar.place()
 
     def toggle_collapse(self, instant=False):
