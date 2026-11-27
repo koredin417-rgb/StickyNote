@@ -231,6 +231,7 @@ class QuietGestureTest(InteractTest):
                 ring.move([(a + 7 * k, b + 3 * k, c + 7 * k, d + 3 * k) for a, b, c, d in boxes])
                 pump(self.app, timeout=0.01)
         self.assertEqual(spy.call_count, 0)
+        pump(self.app, lambda: not self.app.clock._moves, timeout=0.2)    # (it moves at the frame: B6)
         self.assertEqual(ring.top.winfo_rootx() - ring._frame[0], 0)
         ring.hide()
 
@@ -496,6 +497,67 @@ class OverlapTest(unittest.TestCase):
         self.assertTrue(pushed)
         self.assertLess(pushed[0] - t0, 0.06)
         self.settle()
+
+
+
+class BatchTest(unittest.TestCase):
+    """Phase 8, B6: what moves with a dragged note (the group's ring, a docked calendar) moves in
+    the frame's one window batch with it, not a frame later through <Configure> and geometry()."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+
+    def batches(self):
+        calls = []
+        real = winapi.defer_move
+
+        def defer(moves):
+            calls.append({m[0] for m in moves})
+            return real(moves)
+        return calls, patched(winapi, "defer_move", defer)
+
+    def test_ring_moves_in_batch(self):
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y))
+        calls, patch = self.batches()
+        with patch:
+            for k in range(1, 6):
+                a._drag_move(ev(x - 9 * k, y - 7 * k))
+                self.frame()
+        ring = winapi.hwnd_of(self.app.ring.top)        # (read once it shows: its frame window is made then)
+        notes = {winapi.hwnd_of(a.win), winapi.hwnd_of(b.win)}
+        self.assertEqual(len(calls), 5)
+        for moved in calls:
+            self.assertTrue(notes | {ring} <= moved, moved)
+        a._drag_end(ev(x - 45, y - 35))
+        self.settle()
+
+    def test_docked_calendar_moves_in_batch(self):
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        cal = a.calendar
+        self.assertTrue(cal.docked)
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y, ALT))
+        hw = {winapi.hwnd_of(a.win), winapi.hwnd_of(cal.top)}
+        calls, patch = self.batches()
+        with patch, patched(cal, "move_to", Spy(wraps=cal.move_to)) as spy:
+            for k in range(1, 6):
+                a._drag_move(ev(x - 12 * k, y + 6 * k, ALT))
+                self.frame()
+                pump(self.app, timeout=0.02)
+            self.assertEqual(spy.call_count, 0)
+        self.assertEqual(len(calls), 5)
+        for moved in calls:
+            self.assertTrue(hw <= moved, moved)
+        off = (cal.target_box[0] - a.pad.x, cal.target_box[1] - a.pad.y)
+        a._drag_end(ev(x - 60, y + 30, ALT))
+        self.settle()
+        self.assertEqual((cal.target_box[0] - a.pad.x, cal.target_box[1] - a.pad.y), off)
+        self.assertEqual((cal.top.winfo_rootx(), cal.top.winfo_rooty()), tuple(cal.target_box[:2]))
 
 
 if __name__ == "__main__":

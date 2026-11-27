@@ -484,6 +484,18 @@ class CalendarPopup:
         if src is not None and src._group:
             self.app.ring.move(src._live_ring_boxes())
 
+    def ride(self, x: int, y: int) -> None:
+        """Docked, its note dragged: be at (x, y), the same size, in the frame's one window batch
+        with the note (B6). It keeps its side and its offset; place() then finds it there."""
+        b = self.target_box
+        if b is None or getattr(self, "_closing", False):
+            return
+        x, y = int(x), int(y)
+        anim.clock_of(self.top).move(self.top, x, y)
+        self._xy = (x, y)
+        self.target_box = (x, y, x + b[2] - b[0], y + b[3] - b[1])
+        self.app.space_changed()
+
     def move_to(self, box) -> None:
         """Be exactly ``box`` (a plan's box: the end of a glide, or where one was stopped): its
         geometry, fit_size its size, target_box and least as place() keeps them. It does not

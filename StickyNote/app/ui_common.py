@@ -482,13 +482,15 @@ class GroupRing:
             self.cv.pack(fill="both", expand=True)
         self.color = accent_color(near, self.app.theme_colors().bg, "#FFFFFF")
         self._size = self._frame = self._need = None
-        self.move(boxes)
+        self.move(boxes, now=True)          # (withdrawn: put there now, before it shows)
         self.top.attributes("-alpha", 0.0)
         self.top.deiconify()
         self.top.attributes("-topmost", True)
         fade(self.top, "show", 0.0, alpha, MENU_FADE_MS)
 
-    def move(self, boxes):
+    def move(self, boxes, now=False):
+        """Around ``boxes``: the window goes in the frame's one batch with the notes it goes around
+        (B6: never a frame behind them); ``now``: at once."""
         if self.top is None or not boxes:
             return
         px = self.app.px
@@ -524,7 +526,10 @@ class GroupRing:
         geo = f"{w}x{h}+{x0}+{y0}"
         if geo != getattr(self, "_geo", None):
             self._geo = geo
-            self.top.geometry(geo)
+            if now:
+                self.top.geometry(geo)
+            else:
+                anim.clock_of(self.top).move(self.top, x0, y0, w, h)
 
     def hide(self):
         if self.top is not None:

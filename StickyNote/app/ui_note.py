@@ -2173,6 +2173,13 @@ class NoteWindow:
             app.motion.cancel({CAL})
             b = cal.target_box
             self._cal_along = (cal, b[0] - self.pad.x, b[1] - self.pad.y, b[2] - b[0], b[3] - b[1])
+        # docked calendars ride with their notes, in the frame's one window batch (B6): their
+        # offsets from where their notes are now
+        self._cal_offsets = {}
+        for w in [self] + [o for o, _dx, _dy in self._group]:
+            c = w.calendar
+            if c is not None and c.docked and getattr(c, "_xy", None) and c.top.winfo_ismapped():
+                self._cal_offsets[w] = (c._xy[0] - w.pad.x, c._xy[1] - w.pad.y)
         if self._group or self._cal_along:      # moving together: one theme-color line around them
             self.app.ring_source = self
             self.app.ring.show(self._live_ring_boxes(), self.win, self.pad.alpha)
@@ -2288,7 +2295,8 @@ class NoteWindow:
             boxes.append((x, y, x + w.pad.width, y + _shown_h(w.pad)))
             cal = w.calendar
             if cal is not None and cal.docked and getattr(cal, "_xy", None) and cal.top.winfo_ismapped():
-                ox, oy = cal._xy[0] - w.pad.x, cal._xy[1] - w.pad.y       # placed from the same pad
+                off = getattr(self, "_cal_offsets", {}).get(w)
+                ox, oy = off or (cal._xy[0] - w.pad.x, cal._xy[1] - w.pad.y)    # placed from the same pad
                 cw, ch = cal.top.winfo_width(), cal.top.winfo_height()
                 boxes.append((x + ox, y + oy, x + ox + cw, y + oy + ch))
         along = getattr(self, "_cal_along", None)
@@ -2369,6 +2377,10 @@ class NoteWindow:
             if w.win.winfo_exists():
                 clock.move(w.win, x + ox, y + oy)
                 self._dropped[w] = (x + ox, y + oy)
+        for w, (ox, oy) in getattr(self, "_cal_offsets", {}).items():
+            if w in self._dropped and w.calendar is not None and w.calendar.docked:
+                wx, wy = self._dropped[w]
+                w.calendar.ride(wx + ox, wy + oy)   # (in this batch: <Configure> then finds it there)
         along = getattr(self, "_cal_along", None)
         if along is not None:
             cal, ox, oy, cw, ch = along
