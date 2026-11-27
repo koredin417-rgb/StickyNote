@@ -1366,6 +1366,8 @@ class NoteWindow:
                 pass
         self._trace_ids = []
         self.list_view.release()
+        if self._settings_view is not None:
+            self._settings_view.release()
         self.viewer.release()
         self.app.shots.drop(self)
         self._inline = {}

@@ -48,6 +48,8 @@ import space
 import store as _store
 import texts
 import anim
+import threading
+import updater as _updater
 import gc
 import perf
 import winapi
@@ -73,6 +75,11 @@ from registry import RegistryMixin
 from magnet import MagnetMixin
 from layout import LayoutMixin
 from tiles import TilesMixin
+
+
+UPDATE_POLL_MS = 100            # the Update page reads the updater's news this often while it works
+UPDATE_NOTICE_MS = 600          # "Updated to v..." shows this long after start-up
+UPDATE_CLEAN_DELAY = 3.0        # seconds before the old downloads are deleted (see _after_update)
 
 
 class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin, MagnetMixin, LayoutMixin, TilesMixin):
@@ -157,6 +164,9 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
         self._save_job = self._poll_job = self._day_job = None
         self.signal_file = signal_file
         self._today = date.today()
+        # Settings → Update: one for the app, so every note's Update page shows the same check
+        self.updater = _updater.Updater(Path(_updater.__file__).resolve().parent, data_folder=Path(folder))
+        self._update_job = None
 
         data = self.store.load()
         self.prefs = data.prefs
@@ -215,6 +225,46 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
         if signal_file is not None:
             self._clear_signal()
             self._poll_job = self.root.after(self._signal_ms(), self._poll_signal)    # (older launchers' files)
+        self._after_update()
+
+    # ---- self-update (updater.py) -----------------------------------------------------------
+    def update_check(self) -> None:
+        """The Update page's Check button."""
+        self.updater.check()
+        self._update_poll_soon()
+
+    def update_install(self) -> None:
+        """Its Update now: the installer it starts closes this app and opens the new version."""
+        self.updater.start_install()
+        self._update_poll_soon()
+
+    def _update_poll_soon(self) -> None:
+        if self._update_job is None:
+            self._update_poll()
+
+    def _update_poll(self) -> None:
+        """While a check or download runs: its news shown every UPDATE_POLL_MS (then no more wakeups)."""
+        self._update_job = None
+        if not self.closed and self.updater.pump():
+            self._update_job = self.root.after(UPDATE_POLL_MS, self._update_poll)
+
+    def _after_update(self) -> None:
+        """At start-up: what the last in-app update's installer wrote, shown once; the downloads
+        of earlier updates go (a moment later, on a thread: the installer that just started this
+        app may still be running from its folder)."""
+        threading.Thread(target=lambda: (time.sleep(UPDATE_CLEAN_DELAY), _updater.clean_temp()),
+                         daemon=True, name="update-clean").start()
+        result = _updater.read_result(self.store.folder)
+        if result is None:
+            return
+        if result["ok"]:
+            text = tr("upd_done", v=result.get("version", ""))
+        else:                                   # (the installer put the old version back)
+            text = tr("upd_failed")
+            u = self.updater
+            u.state, u.error, u.error_detail = "error", "upd_err_install", str(result.get("error", ""))
+        first = next(iter(self.windows.values()))
+        self.root.after(UPDATE_NOTICE_MS, lambda: first.win.winfo_exists() and first.show_notice(text))
 
     def finish_typing(self, _event=None):
         """Put the syllable the Korean IME is still putting together into the field
@@ -253,7 +303,8 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
             self._report_error(*sys.exc_info())
         self.closed = True
         for job in (self._poll_job, self._day_job, getattr(self, "_sys_job", None), self._screen_job,
-                    getattr(self, "_thumb_job", None), getattr(self, "_burst_job", None)):
+                    getattr(self, "_thumb_job", None), getattr(self, "_burst_job", None),
+                    getattr(self, "_update_job", None)):
             if job is not None:
                 self.root.after_cancel(job)
         if self.waker is not None:

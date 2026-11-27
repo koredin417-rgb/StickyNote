@@ -20,6 +20,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageGrab,
 import holidays
 import texts
 import perf
+import version
 import winapi
 from icon import draw_icon
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
@@ -909,15 +910,16 @@ SETTING_GROUPS = (
     ("grp_memo", ("set_color", "set_font")),
     ("grp_look", ("set_default_color", "set_theme_color", "set_cursor", "set_transparency")),
     ("grp_place", ("set_snap", "set_auto_layout", "set_minimize", "set_motion")),
-    ("grp_general", ("set_language", "set_date_format", "set_pin_limit", "set_bin_days")),
+    ("grp_general", ("set_language", "set_date_format", "set_pin_limit", "set_bin_days", "set_update")),
 )
 SETTING_HELP = {
     "set_color": "help_color", "set_font": "help_font", "set_default_color": "help_default_color",
     "set_theme_color": "help_theme_color", "set_cursor": "help_cursor", "set_transparency": "help_transparency",
     "set_snap": "help_snap", "set_auto_layout": "help_auto_layout", "set_minimize": "tip_minimize_style", "set_motion": "help_motion",
     "set_language": "help_language", "set_date_format": "help_date_format", "set_pin_limit": "help_pin_limit",
-    "set_bin_days": "help_bin_days",
+    "set_bin_days": "help_bin_days", "set_update": "help_update",
 }
+UPDATE_NOTE_LINES = 12           # the release notes on the Update page: longer ones are cut with …
 SETTING_COLORS = {"set_color": "memo", "set_default_color": "default", "set_theme_color": "theme"}
 SETTING_SLIDE_MS = anim.LONG     # a setting's page slides in over the list
 SETTING_SLIDE_BACK = 0.28        # ... and the list steps back this much of its width
@@ -1080,6 +1082,8 @@ class SettingsView:
             self.bin_buttons[days] = b
             self.flat.append(b)
 
+        self._build_update(page("set_update"), pad)
+
         # under each setting's controls: what it does, in words (the tooltips of the old long page)
         for key, p in self.pages.items():
             words = tk.Label(p, text=tr(SETTING_HELP[key]), font=(UI_FONT, 9), anchor="w", justify="left")
@@ -1109,6 +1113,78 @@ class SettingsView:
         delete = FlatButton(body, tr("set_trash"), self._delete, danger=True)
         delete.pack(anchor="w", pady=(0, px(14)), **pad)
         self.flat.append(delete)
+
+    # -- Update: the installed version, Check, and what the last check or download says
+    def _build_update(self, body, pad):
+        """Its status part is redrawn from the app's one Updater (_sync_update, a listener of
+        it), so every note's page shows the same check."""
+        px = self.app.px
+
+        def wrapped(master, muted=False):
+            lbl = tk.Label(master, font=(UI_FONT, 9), anchor="w", justify="left")
+            lbl.bind("<Configure>", lambda e, w=lbl: w.configure(wraplength=max(px(120), e.width)))
+            (self.muted if muted else self.labels).append(lbl)
+            return lbl
+        installed = wrapped(body)
+        installed.configure(text=tr("upd_installed", v=version.VERSION))
+        installed.pack(fill="x", **pad)
+        row = tk.Frame(body, bd=0)
+        row.pack(fill="x", pady=(px(8), 0), **pad)
+        self.rows.append(row)
+        self.update_check = FlatButton(row, tr("upd_check"), self.app.update_check)
+        self.update_check.pack(side="left")
+        self.flat.append(self.update_check)
+        self.update_box = tk.Frame(body, bd=0)
+        self.update_box.pack(fill="x", **pad)
+        self.rows.append(self.update_box)
+        self.update_status = wrapped(self.update_box)
+        self.update_notes = wrapped(self.update_box, muted=True)
+        self.update_buttons = tk.Frame(self.update_box, bd=0)
+        self.rows.append(self.update_buttons)
+        self.update_now = FlatButton(self.update_buttons, tr("upd_now"), self.app.update_install)
+        self.update_now.pack(side="left", padx=(0, px(6)))
+        self.update_later = FlatButton(self.update_buttons, tr("upd_later"), lambda: self.app.updater.dismiss())
+        self.update_later.pack(side="left")
+        self.flat += [self.update_now, self.update_later]
+        self.update_elsewhere = wrapped(self.update_box, muted=True)
+        self.update_elsewhere.configure(text=tr("upd_elsewhere"))
+        self._updater = self.app.updater
+        self._updater.listeners.append(self._sync_update)
+
+    def _sync_update(self):
+        u, px = self.app.updater, self.app.px
+        for w in self.update_box.winfo_children():
+            w.pack_forget()
+        release = u.release
+        status = {"checking": lambda: tr("upd_checking"), "latest": lambda: tr("upd_latest"),
+                  "error": lambda: tr(u.error, e=u.error_detail) if u.error else "",
+                  "available": lambda: tr("upd_new", v=release.version) if release else "",
+                  "downloading": lambda: tr("upd_downloading", pct=round(u.progress * 100)),
+                  "installing": lambda: tr("upd_installing")}.get(u.state, lambda: "")()
+        if status:
+            self.update_status.configure(text=status)
+            self.update_status.pack(fill="x", pady=(px(10), 0))
+        if u.state == "available" and release is not None:
+            lines = release.notes.split("\n") if release.notes else []
+            if len(lines) > UPDATE_NOTE_LINES:
+                lines = lines[:UPDATE_NOTE_LINES] + ["…"]
+            if lines:
+                self.update_notes.configure(text="\n".join(lines))
+                self.update_notes.pack(fill="x", pady=(px(4), 0))
+            if u.can_install:
+                self.update_buttons.pack(anchor="w", pady=(px(8), 0))
+            else:                               # (a run from the repo or an unzipped folder)
+                self.update_elsewhere.pack(fill="x", pady=(px(8), 0))
+        busy = u.state in ("checking", "downloading", "installing")     # Check does nothing then
+        self.update_check.configure(fg=self.nw.colors.muted if busy else self.nw.colors.fg,
+                                    cursor="" if busy else "hand2")
+
+    def release(self):
+        """The window closes: the Updater must not keep this page (and its window) alive."""
+        try:
+            self._updater.listeners.remove(self._sync_update)
+        except ValueError:
+            pass
 
     # -- the list and opening one setting
     def _list_row(self, body, key, pad):
@@ -1159,6 +1235,7 @@ class SettingsView:
             "set_date_format": lambda: texts.day_label(date.today(), texts.date_format()),
             "set_pin_limit": lambda: str(prefs.pin_limit),
             "set_bin_days": lambda: tr("bin_day_choice", n=prefs.bin_days),
+            "set_update": lambda: f"v{version.VERSION}",
         }[key]()
 
     def _shown_color(self, which):
@@ -1395,6 +1472,7 @@ class SettingsView:
                     b._bg = c.select if chosen else c.well
                     b.configure(bg=b._bg, font=ui_font(9, chosen))
             self._sync_rows()
+            self._sync_update()
         finally:
             self._syncing = False
 

@@ -12,3 +12,6 @@ StickyNote/preview-data/
 .superpowers/
 docs/perf/*.png
 docs/perf/look-log.txt
+
+# release zips built by tools/make_release.py (published as GitHub Release assets, not committed)
+dist/
