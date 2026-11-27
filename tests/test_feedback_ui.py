@@ -164,5 +164,79 @@ class CalendarHoverTest(FeedbackCase):
         self.assertEqual(g.itemcget(tag, "fill"), cal._big_fill(d, False))
 
 
+
+class MinimizeButtonTest(FeedbackCase):
+    """Minimize (B): a "-" button left of the close button on the date row."""
+
+    def click(self, b):
+        b.event_generate("<ButtonPress-1>", x=4, y=4)
+        b.event_generate("<ButtonRelease-1>", x=4, y=4)
+
+    def test_button_sits_left_of_close(self):
+        nw = self.nw
+        self.assertTrue(nw.btn_min.winfo_ismapped())
+        self.assertLessEqual(nw.btn_min.winfo_rootx() + nw.btn_min.winfo_width(), nw.btn_close.winfo_rootx())
+        self.assertEqual(nw.btn_min.winfo_rooty(), nw.btn_close.winfo_rooty())
+
+    def test_button_minimizes(self):            # "rolls away" style: it goes to the taskbar
+        nw = self.nw
+        self.app.prefs.minimize_style = "fold"
+        self.click(nw.btn_min)
+        pump(self.app, lambda: nw.minimized and not nw.rolling, timeout=1.5)
+        self.assertTrue(nw.minimized)
+
+    def test_top_bar_style_folds(self):         # the default "Top bar only": it folds; folded, it goes away
+        nw = self.nw
+        self.assertEqual(self.app.prefs.minimize_style, "bar")
+        self.click(nw.btn_min)
+        self.settle()
+        self.assertTrue(nw.pad.collapsed)
+        self.assertFalse(nw.minimized)
+        self.click(nw.btn_min)
+        pump(self.app, lambda: nw.minimized and not nw.rolling, timeout=1.5)
+        self.assertTrue(nw.minimized)
+
+    def test_date_text_stays_clear_of_the_buttons(self):
+        from ui_common import MIN_W
+        nw = self.nw
+        p = nw.pad
+        self.app.apply({p.id: (p.x, p.y, p.x + self.app.px(MIN_W), p.y + p.height)})
+        self.settle()
+        nw._draw_row()
+        box = nw.row.bbox("all")
+        self.assertIsNotNone(box)
+        self.assertLessEqual(box[2], nw.row.winfo_width())
+
+
+class WordingTest(FeedbackCase):
+    """Wording (C): an empty day says "메모 없음" (the date is in the bar above) and offers "+ 새 메모"
+    with the add icon."""
+
+    def test_empty_day_short_words(self):
+        import texts
+        nw = self.nw
+        nw.toggle_calendar()
+        self.settle()
+        cal = nw.calendar
+        day = next(c[4] for c in cal._cells if c[4].month == cal.month[1] and c[4].day == 28)
+        cal.pick_day(day.isoformat())
+        self.settle()
+        lv = nw.list_view
+        self.assertEqual(lv.empty_text, texts.tr("none_on"))
+        self.assertEqual(texts.TEXTS["none_on"], ("메모 없음", "No memos"))
+        self.assertEqual(texts.TEXTS["new_on_day"], ("새 메모", "New memo"))
+        import tkinter as tk
+
+        def walk(w):
+            yield w
+            for ch in w.winfo_children():
+                yield from walk(ch)
+        buttons = [w for w in walk(nw.win) if isinstance(w, tk.Label) and w.winfo_ismapped()
+                   and w.cget("text") == texts.tr("new_on_day")]
+        self.assertTrue(buttons)
+        self.assertTrue(buttons[0].cget("image"))
+        self.assertEqual(buttons[0].cget("compound"), "left")
+
+
 if __name__ == "__main__":
     unittest.main()

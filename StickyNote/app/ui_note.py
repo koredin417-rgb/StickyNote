@@ -208,6 +208,10 @@ class NoteWindow:
         self.btn_close = IconButton(bar, app, GLYPH["close"], self.close, tr("tip_close"), width=30,
                                     height=DATE_ROW_H - 2)
         self.btn_close.pack(side="right", padx=(0, px(4)))
+        # minimize, left of the close button (picked option B, 2026-11-27): "Top bar only" folds
+        self.btn_min = IconButton(bar, app, GLYPH["minimize"], self.minimize_button, tr("menu_minimize"), width=30,
+                                  height=DATE_ROW_H - 2)
+        self.btn_min.pack(side="right")
         # today's day, big, with the month and weekday beside it (folded: the memo's lines; on
         # another page: its name), drawn in one canvas: see _draw_row
         self.row = tk.Canvas(bar, width=1, height=1, bd=0, highlightthickness=0, cursor="fleur")
@@ -219,7 +223,7 @@ class NoteWindow:
         self._narrow: dict = {}             # font name -> its narrowest glyph's width (fit_text)
         self.date_tip = Tooltip(self.row, tr("tip_date"))
         self.rail_buttons = self.nav_buttons + self.format_buttons + (self.btn_more,)
-        self.buttons = self.rail_buttons + (self.btn_back, self.btn_close)
+        self.buttons = self.rail_buttons + (self.btn_back, self.btn_min, self.btn_close)
         # the date row and the rail's empty part move the note (and the notes snapped to it);
         # double-click on the date row folds it up / unfolds it; right-click: the note's menu
         for w in (bar, self.row, rail, self.rail_top):
@@ -1443,7 +1447,7 @@ class NoteWindow:
             width = self.win.winfo_width() if self.win.winfo_width() > 1 else p.width
         folded = p.collapsed
         page = self.view != "home" and not folded
-        room = width - 2 * self.edge - self.btn_close.winfo_reqwidth() - px(4)
+        room = width - 2 * self.edge - self.btn_close.winfo_reqwidth() - self.btn_min.winfo_reqwidth() - px(4)
         if not folded:
             room -= px(RAIL_W)
         if page:
@@ -1511,7 +1515,7 @@ class NoteWindow:
         for b in self.rail_buttons:
             b.recolor(rc, strong=(b is self.btn_pin and p.pinned))
         self.btn_pin.set_glyph(GLYPH["pinned" if p.pinned else "pin"])
-        for b in (self.btn_back, self.btn_close):
+        for b in (self.btn_back, self.btn_min, self.btn_close):
             b.recolor(c)
         self._draw_row()
         cursor = self.app.cursor_color(c.bg)        # the main theme color's opposite
@@ -2751,7 +2755,8 @@ class NoteWindow:
             return x, y, x + wd.winfo_width(), y + wd.winfo_height()
         rail = self.rail.winfo_width() if self.rail.winfo_ismapped() else 0
         row = box(self.bar)[3]
-        close = box(self.btn_close)[0] if self.btn_close.winfo_ismapped() else fw
+        close = (box(self.btn_min)[0] if self.btn_min.winfo_ismapped()      # (- and x: the right-hand piece)
+                 else box(self.btn_close)[0] if self.btn_close.winfo_ismapped() else fw)
         more = box(self.btn_more)[1] if rail else fh
         grip = box(self.grip) if self.grip.winfo_ismapped() else (fw, fh, fw, fh)
         cover = tk.Canvas(self.win, bd=0, highlightthickness=0, bg=self.colors.bg)
@@ -2959,7 +2964,7 @@ class NoteWindow:
         win, c = self.win, self.colors
         start = _mix(win, accent_color(win, self.app.theme_colors().bg, c.bg), c.bg, 0.15)
         plain = (self.bar, self.row)
-        buttons = (self.btn_back, self.btn_close)
+        buttons = (self.btn_back, self.btn_min, self.btn_close)
 
         last = [None]
 

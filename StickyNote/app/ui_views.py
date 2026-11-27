@@ -364,7 +364,7 @@ class ListView:
         px = self.app.px
         inner = parent or self.area.inner
         if self.day:
-            glyph, text = GLYPH["calendar"], tr("none_on", day=_date_label(self.day))
+            glyph, text = GLYPH["calendar"], tr("none_on")       # (short: the bar above says the day)
         elif self.search.get().strip():
             glyph, text = GLYPH["search"], tr("none_found")
         else:
@@ -376,6 +376,10 @@ class ListView:
             b = FlatButton(inner, tr("new_on_day"),
                            lambda d=self.day: self.nw.new_memo(date=d))
             b.recolor(c)
+            if self.app.icons.available:            # the add icon before the words (option C)
+                b.configure(image=self.app.icons.photo(GLYPH["add"], c.fg, px(SMALL_ICON_BOX)), compound="left")
+            else:
+                b.configure(text="+ " + tr("new_on_day"))
             b.pack()
 
     def _section(self, key, text, count, folded, c, sort=False, icon=None, parent=None):
