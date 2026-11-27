@@ -409,5 +409,94 @@ class GroupResizeClipTest(unittest.TestCase):
         self.assertTrue(c.pad.collapsed)
 
 
+
+class OverlapTest(unittest.TestCase):
+    """Phase 8, B5: chained phases overlap into one motion: a fold's neighbours close up while it
+    rolls; minimize / restore are one curve; a group drop pushes as soon as it lands."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+
+    def fine_pump(self, until, timeout):
+        import time
+        end = time.perf_counter() + timeout
+        while time.perf_counter() < end and not until():
+            self.app.root.update()
+            time.sleep(0.002)
+        return time.perf_counter()
+
+    def record_rolls(self, nw):
+        rec, real = [], nw._roll_geometry
+
+        def roll(h, dy=0):
+            rec.append((h, dy, float(nw.win.attributes("-alpha"))))
+            return real(h, dy)
+        nw._roll_geometry = roll
+        return rec
+
+    def test_fold_moves_neighbours_during_roll(self):
+        import time
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertGreaterEqual(b.pad.y, a.pad.y + a.pad.height - 2, "b is not under a: the test does not test")
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        t0 = time.perf_counter()
+        a.toggle_collapse()
+        self.assertTrue(a.rolling)
+        self.assertTrue(self.app.motion.drives(b.pad.id))      # b starts closing up at once
+        t1 = self.fine_pump(lambda: not a.rolling and not self.app.motion.busy(), 1.0)
+        self.assertLess(t1 - t0, 0.35)
+        self.settle()
+        self.assertTrue(a.pad.collapsed)
+        self.assertEqual(a.win.winfo_height(), a.collapsed_height())
+        self.assertEqual(b.pad.y, a.pad.y + a.collapsed_height() + self.app._gap())
+
+    def test_minimize_one_curve(self):
+        import time
+        nw, p = self.nw, self.nw.pad
+        rec = self.record_rolls(nw)
+        bar = min(p.height, nw.collapsed_height())
+        t0 = time.perf_counter()
+        nw.minimize()
+        t1 = self.fine_pump(lambda: nw.minimized, 1.0)
+        self.assertTrue(nw.minimized)
+        self.assertTrue(any(h > bar + 1 and alpha < p.alpha - 0.01 for h, dy, alpha in rec), rec)
+        self.assertGreater(t1 - t0, 0.2)
+        self.assertLess(t1 - t0, 0.34)
+
+    def test_restore_one_curve(self):
+        nw, p = self.nw, self.nw.pad
+        nw.minimize()
+        self.fine_pump(lambda: nw.minimized, 1.0)
+        rec = self.record_rolls(nw)
+        bar = min(p.height, nw.collapsed_height())
+        nw.restore()
+        self.fine_pump(lambda: not nw.rolling, 1.0)
+        self.settle()
+        self.assertTrue(any(h > bar + 1 and alpha < p.alpha - 0.01 for h, dy, alpha in rec), rec)
+        self.assertAlmostEqual(float(nw.win.attributes("-alpha")), p.alpha, places=2)
+        self.assertEqual(nw.win.winfo_height(), p.height)
+
+    def test_group_drop_pushes_without_timer(self):
+        import time
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        pushed = []
+        real = self.app.push_clear
+        with patched(self.app, "push_clear", lambda ids: (pushed.append(time.perf_counter()), real(ids))):
+            x, y = a.pad.x + 60, a.pad.y + 10
+            a._drag_start(ev(x, y))
+            for k in range(1, 5):                   # (up-left: it stays on the screen, nothing glides back)
+                a._drag_move(ev(x - 10 * k, y - 10 * k))
+                self.frame()
+            a._drag_end(ev(x - 40, y - 40))
+            t0 = time.perf_counter()
+            self.fine_pump(lambda: pushed, 1.0)
+        self.assertTrue(pushed)
+        self.assertLess(pushed[0] - t0, 0.06)
+        self.settle()
+
+
 if __name__ == "__main__":
     unittest.main()

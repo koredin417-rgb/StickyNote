@@ -320,6 +320,14 @@ class Motion:
             except tk.TclError:
                 pass
 
+    def when_still(self, fn) -> None:
+        """Run ``fn`` once nothing this moves any more: with the running plans' end step, or at
+        the next frame when none runs (B5: a step that follows a glide starts as it lands)."""
+        if self._items:
+            self._dones.append(fn)
+        else:
+            self.app.clock.request(fn)
+
     def _got_there(self, item):
         """A glide's last frame: it lands at the start of the next frame, with the others that
         got there (notes first, so the calendar's offset is from its note's final box)."""

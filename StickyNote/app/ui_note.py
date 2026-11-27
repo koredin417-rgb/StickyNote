@@ -1040,10 +1040,11 @@ class NoteWindow:
     def _roll_geometry(self, h, dy=0):
         p = self.pad
         cover = getattr(self, "_rolling_cover", None)
-        if cover is not None and not dy and winapi.clip_height(self.win, p.width, round(h)):
+        if cover is not None and winapi.clip_height(self.win, p.width, round(h)):
             # rolling with its picture: the window stays as big as the picture, its region shows the
-            # top h px (the region first, so the window never shows more than h, even as it grows)
-            geo = f"{p.width}x{cover.full_h}+{p.x}+{p.y}"
+            # top h px (the region first, so the window never shows more than h, even as it grows);
+            # ``dy`` slides it down (minimize: as it rolls, B5)
+            geo = f"{p.width}x{cover.full_h}+{p.x}+{p.y + round(dy)}"
             if getattr(self, "_roll_geo", None) != geo:
                 self._roll_geo = geo
                 self.win.geometry(geo)
@@ -1100,7 +1101,7 @@ class NoteWindow:
         self.minimize()
 
     def minimize(self, animate: bool = True):
-        """Roll up to the top bar (ROLL_MS), slide it down while fading (DOCK_SLIDE_MS), then
+        """Roll up to the top bar while (overlapping) it slides down and fades: one MINIMIZE_MS curve, then
         minimize for real. ``rolling`` keeps the pad's saved size out of it (_on_configure)."""
         if self.rolling or self.minimized:
             return
@@ -1144,16 +1145,15 @@ class NoteWindow:
         bar, slide = min(shown, self.collapsed_height()), px(40)
         self._roll_cover(self._shot())
 
-        def slide_down():
-            def step(k):
-                self._roll_geometry(bar, slide * k)
-                win.attributes("-alpha", alpha * (1 - k))
-            animate_(win, "roll", DOCK_SLIDE_MS, step, finish)
-
-        animate_(win, "roll", ROLL_MS, lambda k: self._roll_geometry(shown + (bar - shown) * k), slide_down)
+        def step(t):                        # one curve (B5): it rolls up, and from a third of the way
+            h = shown + (bar - shown) * anim.ease_out(min(1.0, t / 0.6))    # its bar slides down and
+            u = anim.ease_in(max(0.0, (t - 0.35) / 0.65))                   # fades, speeding up as it goes
+            self._roll_geometry(h, slide * u)
+            win.attributes("-alpha", alpha * (1 - u))
+        animate_(win, "roll", MINIMIZE_MS, step, finish, ease=lambda t: t)
 
     def restore(self, animate: bool = True):
-        """The reverse of minimize: the bar slides up and fades in, then unrolls; then the app
+        """The reverse of minimize, one MINIMIZE_MS curve: the bar slides up and fades in while it unrolls; then the app
         returns the note to its place (return_note)."""
         if self.rolling or not self.minimized:
             return
@@ -1196,16 +1196,12 @@ class NoteWindow:
             finish()
             return
 
-        def unroll():
-            animate_(win, "roll", ROLL_MS, lambda k: self._roll_geometry(bar + (shown - bar) * k), finish)
-
-        def slide_up():
-            def step(k):
-                self._roll_geometry(bar, slide * (1 - k))
-                win.attributes("-alpha", alpha * k)
-            animate_(win, "roll", DOCK_SLIDE_MS, step, unroll)
-
-        slide_up()
+        def step(t):                        # one curve (B5): the bar slides up and fades in, and from 40 %
+            u = anim.ease_out(min(1.0, t / 0.65))                                # of the way it unrolls
+            h = bar + (shown - bar) * anim.ease_out(max(0.0, (t - 0.4) / 0.6))
+            self._roll_geometry(h, slide * (1 - u))
+            win.attributes("-alpha", alpha * u)
+        animate_(win, "roll", MINIMIZE_MS, step, finish, ease=lambda t: t)
 
     def _show_sticker(self):
         self._hide_sticker()
@@ -2602,9 +2598,10 @@ class NoteWindow:
             if any(w.calendar is not None and w.calendar.docked for w in plain_members):
                 plain_members = None
         snapped_to, self._snap_id = getattr(self, "_snap_id", None), None
+        push = None                         # a group let go: what it overlaps slides out, as soon as it lands (B5)
         if was_drag and (self._group or along is not None) and not tiles:
             ids = set(moved_ids)
-            self.app.root.after(GLIDE_MS + 40, lambda: self.app.push_clear(ids))
+            push = lambda: self.app.push_clear(ids)     # noqa: E731
         self._drag = self._resize = None
         self._group, self._dropped, self._resize_group = [], None, []
         self.app.ring_source = None
@@ -2640,6 +2637,8 @@ class NoteWindow:
             self.app.link_drop(moved_ids, snapped_to)
         self.app.settle_links()             # (links that no longer touch break: Alt, a drag to somewhere else)
         self.app.request_save()
+        if push is not None:
+            self.app.motion.when_still(push)
 
     # ---- group resize: a picture stands in for the widgets ---------------------------
     def freeze(self):
@@ -2750,10 +2749,11 @@ class NoteWindow:
         """A folded note is its date row: DATE_ROW_H, its edge included (= PILE_STEP)."""
         return self.app.px(DATE_ROW_H)
 
-    def _apply_collapsed(self, shoot=False):
+    def _apply_collapsed(self, shoot=False, geometry=True):
         """Show the folded / unfolded state (pad.collapsed) without moving other notes. ``shoot``:
         a fold of a note that shows (not one built folded) first takes its picture, as it is
-        painted, for the unfold to roll."""
+        painted, for the unfold to roll. ``geometry`` False: the window keeps its height (it is
+        rolling there: the roll's end calls this again)."""
         p = self.pad
         if p.collapsed and shoot:
             try:
@@ -2771,12 +2771,14 @@ class NoteWindow:
             self.views.pack_forget()
             self.grip.place_forget()
             p.shown_height = self.collapsed_height()
-            self.win.geometry(f"{p.width}x{p.shown_height}")
+            if geometry:
+                self.win.geometry(f"{p.width}x{p.shown_height}")
         else:
             self.views.pack(fill="both", expand=True)
             self._place_grip()
             tk.Misc.tkraise(self.grip)
-            self.win.geometry(f"{p.width}x{p.height}")
+            if geometry:
+                self.win.geometry(f"{p.width}x{p.height}")
         self.app.space_changed()            # folded: as tall as its date row
         self._arrange_chrome(p.width)
         if self.calendar:
@@ -2807,20 +2809,26 @@ class NoteWindow:
             self._unfold_rolling()
 
     def _fold_rolling(self):
-        """Fold up: the note rolls up to its top bar (ROLL_MS), then the plan runs (the notes
-        under it close up)."""
+        """Fold up: the note rolls up to its top bar (ROLL_MS) while the plan runs (the notes
+        under it close up at the same time: one motion, B5). A note the plan moves itself just
+        folds."""
         p, win = self.pad, self.win
         bar = self.collapsed_height()
+        full = p.height
         self.rolling = True
         self._roll_cover(self._shot())
         stop_animation(win, "roll")
+        self.app.set_folded([self], True, rolling=True)
 
         def done():
             self._drop_roll_cover(bar)
             self.rolling = False
-            self.app.set_folded([self], True)
+            self._apply_collapsed()
             self.app.request_save()
-        animate(win, "roll", ROLL_MS, lambda k: self._roll_geometry(p.height + (bar - p.height) * k), done)
+        if self.app.motion.drives(p.id):
+            done()
+            return
+        animate(win, "roll", ROLL_MS, lambda k: self._roll_geometry(full + (bar - full) * k), done)
 
     def _unfold_rolling(self):
         """Unfold: the plan first (what is under it makes room), then the note rolls down from

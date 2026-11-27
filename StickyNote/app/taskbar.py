@@ -122,7 +122,7 @@ class TaskbarMixin:
         if back:
             for nw in back:
                 nw.restore()
-            self.root.after(ROLL_MS + DOCK_SLIDE_MS + 60, self._focus_notes)   # once they have unrolled
+            self.root.after(MINIMIZE_MS + 60, self._focus_notes)   # once they have unrolled
             return
         self._focus_notes()
 

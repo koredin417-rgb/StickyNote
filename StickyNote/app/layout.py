@@ -728,18 +728,19 @@ class LayoutMixin:
             self.set_folded(wins, on)
         self.request_save()
 
-    def set_folded(self, wins: list, on: bool) -> None:
+    def set_folded(self, wins: list, on: bool, rolling: bool = False) -> None:
         """Fold (``on``) or unfold ``wins`` as one plan: folding closes up with every link (P4:
         whatever is in line and linked, whatever Alt or the drag switch say), unfolding pushes
         like any growth in app mode (nothing is dragged: F36). Both plan against the space list
-        from before, as the notes already show their new state. No Undo."""
+        from before, as the notes already show their new state. No Undo. ``rolling``: the notes roll
+        there themselves (their windows keep their height; they call _apply_collapsed after)."""
         if not wins:
             return
         old = self.space()
         by_id = {s.id: s for s in old}
         for w in wins:
             w.pad.collapsed = on
-            w._apply_collapsed(shoot=True)
+            w._apply_collapsed(shoot=True, geometry=not rolling)
         changes, parts = {}, {}
         for w in wins:
             note, s = _pad_box(w.pad), by_id.get(w.pad.id)
