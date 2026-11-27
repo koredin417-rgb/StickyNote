@@ -1020,7 +1020,17 @@ class CalendarPopup:
         before = tuple(self.target_box)
         if self.docked:
             note = geom.pad_box(pad)
-            side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view=view, keep=True)
+            if view == "big" and pad.calendar_side in calgeom.SIDES:
+                # a view switch must not hop sides (plan_dock's keep needs the whole big box on the
+                # screen, so near an edge it moved below or across): big on its own side, then no
+                # bigger than the room there (below), or mini when not even its least fits
+                side, v, cal_box = pad.calendar_side, "big", self._box_for(pad.calendar_side, note, "big")
+                self._plan_flags = (False, "big")       # (what plan_dock sets for a forced view)
+            else:
+                side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view=view, keep=True)
+            if view == "big" and side is None:             # no side has room for big: it stays mini, docked
+                pad.calendar_hold = None                    # (a view click never undocks it: G7 is for a mini
+                side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view="mini", keep=True)  # that fits nowhere)
             if view == "big" and side is not None:         # big goes no further than the room on its side
                 rw, rh = self._room(cal_box, side)
                 lw, lh = self._least_for("big")
