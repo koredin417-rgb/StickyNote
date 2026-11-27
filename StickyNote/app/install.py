@@ -24,6 +24,8 @@ LINK_ICON = "sticky_note.ico"       # the shortcuts' icon: a name of its own, so
 QUIT_SIGNAL = "quit.signal"         # for an older app (it polls for it); a newer one hears "quit" on its port
 
 PARTS = ("runtime", "app", "licenses")
+BACKUP_DIR = ".update-backup"           # under the install folder: the old files while an install runs
+JOURNAL = "journal.txt"                 # in it: what was changed, one line per file (_Swap)
 LINK_NAME = "스티키 노트.lnk"
 HERE = Path(__file__).resolve().parent
 
@@ -63,11 +65,109 @@ def _retry(action, tries: int = 6, wait: float = 0.5):
             time.sleep(wait)
 
 
-def _sync_tree(src: Path, dst: Path) -> None:
-    """Make ``dst`` the same as ``src``, touching only what differs. The runtime is the same
-    from one version to the next, so its files (DLLs a program may still hold for a moment)
-    are left alone; a half-done earlier install is completed. Files the new version no longer
-    has are removed where Windows lets them go (a leftover file does no harm)."""
+def _gone(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+class _Swap:
+    """The files one install changes, each written in the journal before it is changed, so a
+    failure (or, at the next run, a killed installer) can put the old version back: a replaced
+    or removed file waits in the backup folder, an added one is deleted (recover)."""
+
+    def __init__(self, dest: Path):
+        self.dest, self.backup = dest, dest / BACKUP_DIR
+        self._journal = None
+
+    def _note(self, kind: str, rel: Path) -> None:
+        if self._journal is None:
+            self.backup.mkdir(parents=True, exist_ok=True)
+            self._journal = open(self.backup / JOURNAL, "a", encoding="utf-8")
+        self._journal.write(f"{kind}\t{rel.as_posix()}\n")
+        self._journal.flush()
+        os.fsync(self._journal.fileno())        # (on disk before the file it speaks of changes)
+
+    def _save(self, rel: Path, tries: int = 6) -> None:
+        saved = self.backup / rel
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        _retry(lambda: os.replace(self.dest / rel, saved), tries=tries)
+
+    def put(self, path: Path, rel: Path) -> None:
+        """``path``'s contents to ``dest/rel``: written beside it as .new, then swapped in."""
+        target = self.dest / rel
+        new = target.with_name(target.name + ".new")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _retry(lambda: _copy_file(path, new))
+            if target.exists():
+                self._note("replaced", rel)
+                self._save(rel)
+            else:
+                self._note("added", rel)
+            _retry(lambda: os.replace(new, target))
+        except BaseException:
+            try:
+                _gone(new)
+            except OSError:
+                pass
+            raise
+
+    def remove(self, rel: Path) -> None:
+        """A file the new version lacks goes to the backup, where Windows lets it go (a
+        leftover file does no harm)."""
+        self._note("removed", rel)
+        try:
+            self._save(rel, tries=1)
+        except OSError:
+            pass
+
+    def _close(self) -> None:
+        if self._journal is not None:
+            self._journal.close()
+            self._journal = None
+
+    def commit(self) -> None:
+        self._close()
+        shutil.rmtree(self.backup, ignore_errors=True)
+
+    def undo(self) -> None:
+        self._close()
+        recover(self.dest)
+
+
+def recover(dest: Path) -> bool:
+    """A backup left by an install that failed or was killed: its files go back (the newest
+    journal entry first) and the backup is deleted. Returns whether there was one."""
+    dest = Path(dest)
+    backup = dest / BACKUP_DIR
+    if not backup.exists():
+        return False
+    try:
+        lines = (backup / JOURNAL).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        kind, _tab, rel = line.partition("\t")
+        if not rel or kind not in ("replaced", "added", "removed"):
+            continue                            # (a line cut short by the kill)
+        target, saved = dest / rel, backup / rel
+        _gone(target.with_name(target.name + ".new"))
+        if kind == "added":
+            _retry(lambda t=target: _gone(t))
+        elif saved.exists():                    # (not there: the old file never moved)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _retry(lambda s=saved, t=target: os.replace(s, t))
+    shutil.rmtree(backup, ignore_errors=True)
+    return True
+
+
+def _sync_tree(src: Path, dst: Path, swap: _Swap, base: Path) -> None:
+    """Make ``dst`` (``base`` under the install folder) the same as ``src``, touching only what
+    differs. The runtime is the same from one version to the next, so its files (DLLs a program
+    may still hold for a moment) are left alone. Files the new version no longer has are removed
+    where Windows lets them go; directories made stay (an empty leftover does no harm)."""
     wanted = set()
     for path in src.rglob("*"):
         rel = path.relative_to(src)
@@ -80,20 +180,20 @@ def _sync_tree(src: Path, dst: Path) -> None:
             continue
         if _same_file(path, target):
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _retry(lambda p=path, t=target: _copy_file(p, t))
+        swap.put(path, base / rel)
     if not dst.exists():
         return
     for path in sorted(dst.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-        if path.relative_to(dst) in wanted:
+        rel = path.relative_to(dst)
+        if rel in wanted:
             continue
-        try:
-            if path.is_dir():
+        if path.is_dir():
+            try:
                 path.rmdir()                # (only once empty)
-            else:
-                path.unlink()
-        except OSError:
-            pass
+            except OSError:
+                pass
+        else:
+            swap.remove(base / rel)
 
 
 def _copy_file(path: Path, target: Path) -> None:
@@ -106,16 +206,24 @@ def _copy_file(path: Path, target: Path) -> None:
 
 def install(source: Path, dest: Path, link_dirs) -> list[Path]:
     """Copy the program to ``dest`` (replacing an earlier install) and make the
-    shortcuts. Returns the shortcut paths."""
+    shortcuts. Returns the shortcut paths. A failure while copying puts the old files back
+    (and is raised); so does the next run after a killed one (recover)."""
     source, dest = Path(source), Path(dest)
+    recover(dest)
     if source.resolve() != dest.resolve():
         ours = ((dest / "app" / "main.py").exists() or (dest / "app" / "app.ico").exists()
                 or (dest.name.lower() == "stickynote" and (dest / "runtime" / "python.exe").exists()))
         if not ours and any((dest / part).exists() for part in PARTS):
             raise InstallError(f"{dest} 폴더에 다른 프로그램의 파일이 있어 설치하지 않았습니다.")
-        for part in PARTS:
-            if (source / part).is_dir():
-                _sync_tree(source / part, dest / part)
+        swap = _Swap(dest)
+        try:
+            for part in PARTS:
+                if (source / part).is_dir():
+                    _sync_tree(source / part, dest / part, swap, Path(part))
+        except BaseException:
+            swap.undo()
+            raise
+        swap.commit()
     made = []
     exe = app_exe(dest)
     icon = dest / "app" / LINK_ICON
