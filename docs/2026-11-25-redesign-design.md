@@ -896,7 +896,7 @@ All numbers come from one session on a 72 Hz display (13.9 ms per frame), with `
 | Saves after new / reopen / close / trash / restore | Inside the call, before the first frame (about 4–5 ms) | When the motion ends, at most 1 s later; quitting saves everything | B4 |
 | Idle | 2 wakeups in 10 s | 2 (clean runs) | Same |
 | `baseline` scenarios | `docs/perf/phase8-before.json` | `docs/perf/phase8.json` | Same within noise, except one known cost below |
-| Tests | 206 | 241 (35 new) | All pass |
+| Tests | 206 | 249 (43 new) | All pass |
 
 **What changed:**
 - **The frame clock (`anim.py`):**
@@ -923,6 +923,15 @@ All numbers come from one session on a 72 Hz display (13.9 ms per frame), with `
   - The magnet's pull eases on a 28 ms lag, finishing on its own frames.
   - A release mid-ease lands exactly on the snap.
   - A drop that glides starts at the pointer's release speed.
+
+**The fresh review** found no critical issues and five important ones. All were fixed with a test that failed first:
+- Close and trash still saved before their first frame.
+- A hand held still before the release counted as a throw.
+- A docked calendar started a thrown drop from rest.
+- A held snap crept with the pointer. The lag now runs only on a snap's change.
+- A window's region was cleared before Tk had shrunk the window, at a group resize's release and at a roll's end.
+
+The review also surfaced a sixth fix: a calendar docked below a folding note jumped over it as the roll began. Nine minor findings are left for later; they are listed in the ledger.
 
 **Known costs and open items:**
 - **The group resize misses its 72 fps target.** What's left is Tk repainting each frozen cover's moving pieces, plus the dragged note's own resize. Clipping the dragged note too measured no gain.
