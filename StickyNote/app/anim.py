@@ -133,6 +133,7 @@ class FrameClock:
         self._fine = False
         self._fine_job = None
         self._idle_fns: list = []
+        self._quiet_fns: list = []                  # quiet(): run once when the clock next goes still
         self._idle_job = None
         self._idle_since = time.perf_counter()
         self._gc_at = 0.0
@@ -225,6 +226,17 @@ class FrameClock:
     def _write(a, v: tuple) -> None:
         a.write(v[0] if a.scalar else v)
 
+    def quiet(self, fn) -> None:
+        """Run ``fn`` once, as soon as nothing moves: right after the last frame of what runs
+        now, or at the next idle moment when nothing does (work kept out of the frames, B4)."""
+        if self.busy:
+            self._quiet_fns.append(fn)
+            return
+        try:
+            self.root.after_idle(fn)
+        except tk.TclError:
+            pass
+
     def idle(self, fn) -> None:
         """Run ``fn`` once the clock has been quiet for IDLE_S."""
         self._idle_fns.append(fn)
@@ -257,6 +269,7 @@ class FrameClock:
         self._anims.clear()
         self._requests.clear()
         self._moves.clear()
+        self._quiet_fns.clear()
         if self._fine:
             winapi.fine_timer(False)
             self._fine = False
@@ -448,6 +461,12 @@ class FrameClock:
     def _went_idle(self) -> None:
         self._grid0 = None
         self._work, self._half = [], False          # the next motion starts at full rate (B2)
+        fns, self._quiet_fns = self._quiet_fns, []
+        for fn in fns:
+            try:
+                fn()
+            except Exception:
+                self._report()
         self._idle_since = time.perf_counter()
         try:
             self._fine_job = self.root.after(int(FINE_RELEASE_S * 1000), self._release_fine)

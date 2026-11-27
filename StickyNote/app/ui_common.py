@@ -70,6 +70,7 @@ PALETTE = (
 
 MIN_W, MIN_H = 260, 170
 SAVE_DELAY_MS = 400
+SAVE_SOON_MS = 1000              # save_soon: once the motion an action started is over, at most this late
 SIGNAL_POLL_MS = 10_000          # the signal files (an older launcher or installer): the port is the way now
 DAY_CHECK_MS = 30_000            # (unused: the day is checked at midnight and on WM_TIMECHANGE / resume)
 DOUBLE_CLICK_MS = 260
