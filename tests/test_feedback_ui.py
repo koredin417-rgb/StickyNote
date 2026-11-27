@@ -103,5 +103,66 @@ class MenuMotionTest(FeedbackCase):
         self.assertFalse(top.winfo_exists())
 
 
+
+class CalendarHoverTest(FeedbackCase):
+    """Calendar hover (B): the day under the mouse fades in (120 ms), the one left fades out (180 ms),
+    through a fixed ramp of 5 colours (no new picture per frame)."""
+
+    def calendar(self, big=False):
+        self.nw.toggle_calendar()
+        self.settle()
+        cal = self.nw.calendar
+        if big:
+            cal.set_view("big")
+            self.settle()
+        from datetime import date
+        days = [c[4] for c in cal._cells if c[4].month == cal.month[1] and c[4] != date.today()
+                and c[4].isoformat() != cal.selected]
+        return cal, days
+
+    def test_mini_hover_fades_in_and_out(self):
+        cal, days = self.calendar()
+        g, c = cal.grid, cal.colors
+        d = days[3]
+        cal._set_hover(d)
+        self.assertTrue(self.app.clock.active(g, "hover_in"))
+        item = g.find_withtag("hover")
+        self.assertTrue(item)
+        tw, th = cal._spots[d.isoformat()][2:]
+        self.assertNotEqual(g.itemcget(item[0], "image"), str(cal._tile(c.hover, tw, th)))   # not solid at once
+        self.settle()
+        self.assertEqual(g.itemcget(g.find_withtag("hover")[0], "image"), str(cal._tile(c.hover, tw, th)))
+        cal._set_hover(None)
+        self.assertTrue(self.app.clock.active(g, "hover_out"))
+        self.assertTrue(g.find_withtag("hover_out"))
+        self.settle()
+        self.assertFalse(g.find_withtag("hover_out"))
+        self.assertFalse(g.find_withtag("hover"))
+
+    def test_hover_tiles_stay_bounded(self):
+        cal, days = self.calendar()
+        for d in days[:6] * 3:
+            cal._set_hover(d)
+            pump(self.app, timeout=0.03)
+        cal._set_hover(None)
+        self.settle()
+        sizes = {(w, h) for (_col, w, h) in cal._tiles}
+        self.assertLessEqual(len(cal._tiles), 6 * len(sizes) + 2)   # (the ramp's 5 + the selection's)
+
+    def test_big_hover_fades_the_cell(self):
+        cal, days = self.calendar(big=True)
+        g = cal.grid
+        d = days[3]
+        tag = f"cell{d.isoformat()}"
+        cal._set_hover(d)
+        self.assertTrue(self.app.clock.active(g, f"hover:{d.isoformat()}"))
+        self.assertNotEqual(g.itemcget(tag, "fill"), cal._big_fill(d, True))
+        self.settle()
+        self.assertEqual(g.itemcget(tag, "fill"), cal._big_fill(d, True))
+        cal._set_hover(None)
+        self.settle()
+        self.assertEqual(g.itemcget(tag, "fill"), cal._big_fill(d, False))
+
+
 if __name__ == "__main__":
     unittest.main()

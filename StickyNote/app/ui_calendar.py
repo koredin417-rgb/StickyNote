@@ -1323,7 +1323,7 @@ class CalendarPopup:
             g.create_image(cx, cy, image=self._tile(self.colors.select, tw, th), tags=("selected",))
             g.tag_lower("selected")
         hover, self._hover = self._hover, None      # (its tile is not drawn under the picked day)
-        self._set_hover(hover)
+        self._set_hover(hover, fade=False)
 
     def _show_picked(self, old, new):
         """The memo titles of ``old`` and ``new`` repainted for who is picked now (big view)."""
@@ -1796,24 +1796,86 @@ class CalendarPopup:
             self.preview.destroy()
             self.preview = None
 
-    def _set_hover(self, d):
+    def _set_hover(self, d, fade=True):
         """Only the two days change (the old one and the new one), not the whole month: a
-        month of many memos took ~20 ms to redraw at every day the mouse crossed."""
+        month of many memos took ~20 ms to redraw at every day the mouse crossed. The day under
+        the mouse fades in (CAL_HOVER_IN_MS) and the one left fades out (CAL_HOVER_OUT_MS), through
+        a fixed ramp of CAL_HOVER_STEPS colours (picked option B, 2026-11-27). ``fade`` False: at once."""
         if d == self._hover or getattr(self, "_paging", False):
             return
         old, self._hover = self._hover, d
         g, c = self.grid, self.colors
+        clock = anim.clock_of(g)
+        n = CAL_HOVER_STEPS
         if self.expanded:
+            keys = self.__dict__.setdefault("_hover_keys", set())
             for day in (old, d):
-                if day is not None and g.find_withtag(f"cell{day.isoformat()}"):
-                    g.itemconfigure(f"cell{day.isoformat()}", fill=self._big_fill(day, day == d))
+                tag = f"cell{day.isoformat()}" if day is not None else None
+                if tag is None or not g.find_withtag(tag):
+                    continue
+                on, key = day == d, f"hover:{day.isoformat()}"
+                end = self._big_fill(day, on)
+                if not fade:
+                    clock.stop(g, key)
+                    g.itemconfigure(tag, fill=end)
+                    continue
+                ramp = [_mix(self.top, g.itemcget(tag, "fill"), end, i / n) for i in range(1, n + 1)]
+
+                def step(k, tag=tag, ramp=ramp):
+                    i = round(k * n)
+                    if i:
+                        g.itemconfigure(tag, fill=ramp[i - 1])
+                keys.add(key)
+                animate(g, key, CAL_HOVER_IN_MS if on else CAL_HOVER_OUT_MS, step,
+                        lambda tag=tag, end=end, key=key: (keys.discard(key), g.itemconfigure(tag, fill=end)),
+                        ease=anim.ease_out if on else anim.ease_in, kind="fade")
             return
+        ramp, shown = self._hover_ramp(), getattr(self, "_hover_shown", None)
+        clock.stop(g, "hover_out")
+        g.delete("hover_out")                       # (an earlier day still fading out goes now)
+        if shown is not None and g.find_withtag("hover"):
+            clock.stop(g, "hover_in")
+            if fade and shown[2] > 0:               # the day left fades out from where it got
+                g.itemconfigure("hover", tags=("hover_out",))
+                tw, th, i0 = shown
+
+                def out(k, tw=tw, th=th, i0=i0):
+                    i = round(i0 * (1 - k))
+                    if i:
+                        g.itemconfigure("hover_out", image=self._tile(ramp[i - 1], tw, th))
+                    else:
+                        g.delete("hover_out")
+                animate(g, "hover_out", CAL_HOVER_OUT_MS, out, lambda: g.delete("hover_out"),
+                        ease=anim.ease_in, kind="fade")
         g.delete("hover")
+        self._hover_shown = None
         spot = self._spots.get(d.isoformat()) if d is not None else None
         if spot is not None and d != date.today() and d.isoformat() != self.selected:
             cx, cy, tw, th = spot
-            g.create_image(cx, cy, image=self._tile(c.hover, tw, th), tags=("hover",))
+            g.create_image(cx, cy, image=self._tile(ramp[0 if fade else n - 1], tw, th), tags=("hover",))
             g.tag_lower("hover", f"d{d.isoformat()}")
+            self._hover_shown = (tw, th, 1 if fade else n)
+            if fade:
+                def step_in(k, tw=tw, th=th):
+                    i = max(1, round(k * n))
+                    if self._hover_shown is not None and i != self._hover_shown[2]:
+                        self._hover_shown = (tw, th, i)
+                        g.itemconfigure("hover", image=self._tile(ramp[i - 1], tw, th))
+                animate(g, "hover_in", CAL_HOVER_IN_MS, step_in, ease=anim.ease_out, kind="fade")
+
+    def _hover_ramp(self):
+        """The mini view's hover colours, from the grid's own to the full hover colour."""
+        n, c = CAL_HOVER_STEPS, self.colors
+        return [_mix(self.top, self.grid.cget("bg"), c.hover, i / n) for i in range(1, n + 1)]
+
+    def _stop_hover_fades(self):
+        """A full draw: any hover fading in or out ends (the draw shows the day under the mouse as is)."""
+        g, clock = self.grid, anim.clock_of(self.grid)
+        for key in ("hover_in", "hover_out", *self.__dict__.get("_hover_keys", ())):
+            clock.stop(g, key)
+        self.__dict__.get("_hover_keys", set()).clear()
+        g.delete("hover_out")
+        self._hover_shown = None
 
     # -- drawing
     @perf.timed("calendar_draw")
@@ -1823,6 +1885,7 @@ class CalendarPopup:
         y, m = self.month
         self._drawn = self.month
         self._draw_head()
+        self._stop_hover_fades()
         g.delete(f"!{keep}" if keep else "all")
         if self.fit_size:                   # filling a given size: the cells for six weeks (C2)
             self._fit_cells(6)
@@ -1860,6 +1923,7 @@ class CalendarPopup:
                     g.create_image(cx, cy, image=self._tile(c.select, tw, th), tags=("selected",))
                 elif d == self._hover:
                     g.create_image(cx, cy, image=self._tile(c.hover, tw, th), tags=("hover",))
+                    self._hover_shown = (tw, th, CAL_HOVER_STEPS)
                 if d == today:                      # today: a circle in the theme's opposite colour, a bold number
                     fg = self._today_circle(cx, cy, (UI_BOLD, size, "bold"), k, str(d.day))
                 elif not in_month:
