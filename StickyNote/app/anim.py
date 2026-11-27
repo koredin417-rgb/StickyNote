@@ -90,7 +90,10 @@ class _Anim:
         self.tween, self.scalar = False, False
 
     def progress(self, now: float) -> float:
-        return 1.0 if self.ms <= 0 else min(1.0, (now - self.t0) * 1000 / self.ms)
+        """0..1. Before its first frame (t0 None) it has not started: 0."""
+        if self.ms <= 0:
+            return 1.0
+        return 0.0 if self.t0 is None else min(1.0, (now - self.t0) * 1000 / self.ms)
 
     def value(self, s: float) -> tuple:
         if self.m is None:              # an exit (or any curve but ease_out): plain interpolation
@@ -165,13 +168,13 @@ class FrameClock:
         self._anims.pop(k, None)
         if self.mode == "off" or (self.mode == "reduced" and ms > FAST):
             ms = SKIP_MS                            # (the Animations setting: no motion; done at the next frame)
-        a = _Anim(owner, key, time.perf_counter(), ms, ease, done)
+        a = _Anim(owner, key, None, ms, ease, done)       # (its clock starts at its first frame: _tick)
         a.step = step
         try:
-            step(ease(a.progress(a.t0)))
+            step(ease(a.progress(0.0)))
         except tk.TclError:
             return
-        if a.progress(a.t0) >= 1.0:
+        if a.progress(0.0) >= 1.0:
             if done is not None:
                 done()
             return
@@ -200,7 +203,7 @@ class FrameClock:
         else:
             cur = read()
             v0 = (float(cur),) if scalar else tuple(float(v) for v in cur)
-        a = _Anim(owner, channel, now, ms, ease, done)
+        a = _Anim(owner, channel, None, ms, ease, done)   # (its clock starts at its first frame: _tick)
         a.tween, a.scalar, a.v0, a.v1, a.write = True, scalar, v0, v1, write
         if ease is ease_out:
             a.m = tuple(start_slope(p, q, (vel[i] if vel else 0.0), max(ms, 1) / 1000)
@@ -258,6 +261,8 @@ class FrameClock:
     # ---- the loop ----------------------------------------------------------------------------
     def _wake(self) -> None:
         if self._job is None:
+            if not self._fine:                      # the first frame's after() is on time too
+                self._fine = bool(winapi.fine_timer(True))
             if self._idle_job is not None:
                 self.root.after_cancel(self._idle_job)
                 self._idle_job = None
@@ -269,6 +274,11 @@ class FrameClock:
         if now - self._timing_at > TIMING_TTL:
             self._timing, self._timing_at = winapi.composition_timing(), now
         return self._timing
+
+    def _period(self) -> float:
+        """The display's frame period (s): DWM's, else the fallback grid."""
+        timing = self._display(time.perf_counter())
+        return timing[1] if timing is not None and timing[1] else GRID
 
     def _schedule(self) -> None:
         now = time.perf_counter()
@@ -307,9 +317,12 @@ class FrameClock:
             except Exception:
                 self._report()
         finished, logged = [], set()
+        period = self._period()
         for k, a in list(self._anims.items()):
             if self._anims.get(k) is not a:
                 continue                            # replaced or stopped by an earlier step
+            if a.t0 is None:                        # its first frame: one frame in (B1), however long
+                a.t0 = now - period                 # the work between its start and this frame took
             s = a.progress(now)
             try:
                 if a.tween:

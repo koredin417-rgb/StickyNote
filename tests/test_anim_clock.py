@@ -149,5 +149,50 @@ class ClockTest(unittest.TestCase):
             perf.perf.reset()
 
 
+def _lin(t):
+    return t
+
+
+class FirstFrameTest(unittest.TestCase):
+    """B1: an animation's clock starts at its first frame, not at the call (work done between the
+    call and the first frame must not eat into the curve)."""
+    setUp, tearDown, run_for = ClockTest.setUp, ClockTest.tearDown, ClockTest.run_for
+
+    def test_first_frame_starts_one_period_in(self):
+        P, ks = self.clock._period(), []
+        self.clock.animate(self.root, "x", 120, ks.append, ease=_lin)
+        time.sleep(0.06)                        # the caller's other work before the first frame
+        self.run_for(0.3)
+        self.assertEqual(ks[0], 0.0)
+        self.assertGreater(ks[1], 0.0)
+        self.assertLessEqual(ks[1], 1.6 * P / 0.120)
+        self.assertEqual(ks[-1], 1.0)
+
+    def test_tween_first_frame_one_period_in(self):
+        P, vals = self.clock._period(), []
+        self.clock.tween(self.root, "c", 100.0, 120, frm=0.0, ease=_lin, read=lambda: 0.0, write=vals.append)
+        time.sleep(0.06)
+        self.run_for(0.3)
+        self.assertEqual(vals[0], 0.0)
+        self.assertGreater(vals[1], 0.0)
+        self.assertLessEqual(vals[1], 100 * 1.6 * P / 0.120)
+
+    def test_stop_before_first_frame_stays(self):
+        vals = []
+        self.clock.tween(self.root, "c", 100.0, 120, frm=0.0, read=lambda: 0.0, write=vals.append)
+        self.clock.stop(self.root, "c")
+        self.run_for(0.1)
+        self.assertEqual(vals, [0.0])
+
+    def test_wake_takes_fine_timer(self):
+        self.clock.animate(self.root, "x", 30, lambda k: None)
+        self.run_for(0.15)
+        self.assertFalse(self.clock.busy)
+        self.clock._release_fine()
+        self.assertFalse(self.clock.fine_timer_held)
+        self.clock.request(lambda: None)
+        self.assertTrue(self.clock.fine_timer_held)
+
+
 if __name__ == "__main__":
     unittest.main()
