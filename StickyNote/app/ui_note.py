@@ -198,6 +198,7 @@ class NoteWindow:
         self._rail_hidden: tuple = ()           # ... and those that would show if there were room
         self._editing = False                   # the memo text has the focus: the format buttons show
         self._cover = None                      # the picture standing in while a group resizes
+        self._clip = None                       # ... and the box it shows while it does (clip_to)
 
         bar = self.bar = tk.Frame(main, bd=0, height=self._row_h())
         bar.pack(fill="x")
@@ -2471,7 +2472,10 @@ class NoteWindow:
                     oh = max(px(MIN_H), oh)
                 if (ow, oh) != (r - l, b - t) or o._cover is not None:
                     o.freeze()                  # its size changes: a picture is redrawn, not its widgets
-                self._place(o, x, y, ow, oh)
+                if o._cover is not None:
+                    o.clip_to(x, y, ow, oh)     # (shown through a region: no resize each frame, B3)
+                else:
+                    self._place(o, x, y, ow, oh)
                 boxes.append((x, y, x + ow, y + (_shown_h(o.pad) if o.pad.collapsed else oh)))
                 self._now[o.pad.id] = (x, y, x + ow, y + oh)
             if group:
@@ -2686,13 +2690,54 @@ class NoteWindow:
                 cover.coords(item, *where(W, H))
         cover.bind("<Configure>", lambda e: lay(e.width, e.height))
         lay(fw, fh)
+        cover.lay = lay
         self._cover, self._cover_photos = cover, photos
         cover.place(x=e, y=e, relwidth=1, relheight=1, width=-2 * e, height=-2 * e)
         self.frame.pack_forget()
 
+    def clip_to(self, x, y, w, h):
+        """Frozen in a group resize (B3): show the box (x, y, w, h) without resizing the window
+        at every frame (each resize costs Tk a layout and a repaint of the whole note: a group of
+        16 ran at 36 fps). The window keeps its size and a window region shows w x h of it; it
+        grows only when it must, RING_SLACK px at a time. The pad says the box shown (a docked
+        calendar follows it). thaw() makes the window that box again."""
+        cover = self._cover
+        if cover is None:
+            self.app.clock.move(self.win, x, y, w, h)
+            return
+        clock = self.app.clock
+        real = getattr(self, "_clip_real", None) or (self.win.winfo_width(), self.win.winfo_height())
+        if w > real[0] or h > real[1]:
+            slack = self.app.px(GroupRing.RING_SLACK)
+            real = (max(real[0], w + slack), max(real[1], h + slack))
+            clock.move(self.win, x, y, real[0], real[1])
+        else:
+            clock.move(self.win, x, y)
+        self._clip_real = real
+        if self._clip is None:                  # the cover stays as big as the window (nothing in it is
+            cover.unbind("<Configure>")         # laid out again): only its pieces move, to the size shown
+        if self._clip is None or tuple(self._clip[2:]) != (w, h):
+            winapi.clip_box(self.win, w, h, self.app.px(8))     # (the region first: never more shows)
+            e = self.edge
+            cover.lay(w - 2 * e, h - 2 * e)
+            self._sized_late = True             # (laid out for its size when thawed)
+        self._clip = (x, y, w, h)
+        p = self.pad
+        p.x, p.y, p.width = x, y, w
+        if not p.collapsed:
+            p.height = h
+        self.app.space_changed()
+        if self.calendar is not None and self.calendar.docked:
+            self.calendar.place()
+
     def thaw(self):
         if self._cover is None:
             return
+        clip, self._clip, self._clip_real = self._clip, None, None
+        if clip is not None:                    # the window that box again, then no region (the
+            x, y, w, h = clip                   # region last: it never shows the big window)
+            self.win.geometry(f"{w}x{h}+{x}+{y}")
+            winapi.clip_height(self.win)
         self._pack_frame()
         self._cover.destroy()
         self._cover = self._cover_photos = None
@@ -2843,6 +2888,8 @@ class NoteWindow:
         # <Map>/<Unmap> binding for that, as ShowWindow (winapi.minimize) runs those at once,
         # inside a ctypes call that let go of the GIL
         self.app.space_changed()
+        if self._clip is not None:              # a group resize shows it through a region: the pad
+            return                              # is what clip_to says, not the window's real size
         if self.win.state() != "normal":
             return
         if self.app.screens_pending and not self.app.moving:

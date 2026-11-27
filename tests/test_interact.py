@@ -320,5 +320,94 @@ class PerFrameTest(InteractTest):
         cal._chip_drag = None
 
 
+
+class GroupResizeClipTest(unittest.TestCase):
+    """Phase 8, B3: in a group resize the frozen notes' windows keep their size (each real resize
+    costs Tk a layout and a repaint); a window region shows the size the drag gives them, and
+    the window grows only in RING_SLACK steps. Let go, each is exactly its pad's box again."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+    group_of_three = InteractTest.group_of_three
+
+    def start(self):
+        a, b, c = self.group_of_three()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        a._resize_start(ev(x, y))
+        frozen = [o for o in (b, c) if o._cover is not None]
+        self.assertTrue(frozen, "no note in line: the test does not test")
+        return a, (b, c), frozen, x, y
+
+    def test_group_resize_shrink_keeps_window_size(self):
+        a, others, frozen, x, y = self.start()
+        sizes = {o: (o.win.winfo_width(), o.win.winfo_height()) for o in frozen}
+        shown0 = {o: (o.pad.width, o.pad.height) for o in frozen}
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        pump(self.app, timeout=0.05)
+        for o in frozen:
+            self.assertEqual((o.win.winfo_width(), o.win.winfo_height()), sizes[o])
+            self.assertIsNotNone(o._clip)
+            self.assertNotEqual(tuple(o._clip[2:]), shown0[o])     # (it shows a smaller size)
+        a._drag_end(ev(x - 20, y - 20))
+        self.settle()
+
+    def test_group_resize_grow_steps_by_slack(self):
+        a, others, frozen, x, y = self.start()
+        seen = {o: [(o.win.winfo_width(), o.win.winfo_height())] for o in frozen}
+        for k in range(1, 16):
+            a._resize_move(ev(x + 10 * k, y + 10 * k))
+            self.frame()
+            pump(self.app, timeout=0.01)
+            for o in frozen:
+                size = (o.win.winfo_width(), o.win.winfo_height())
+                if size != seen[o][-1]:
+                    seen[o].append(size)
+        for o in frozen:
+            self.assertLessEqual(len(seen[o]) - 1, 2, seen[o])
+        a._drag_end(ev(x + 150, y + 150))
+        self.settle()
+
+    def test_dwm_border_hidden_while_clipped(self):
+        # DWM draws a window's 1 px border at its real size even outside its region: hidden
+        # while a region shows less than the window, back when the region goes
+        calls = []
+        with patched(winapi, "_dwm_border", lambda hwnd, on: calls.append(on)):
+            a, others, frozen, x, y = self.start()
+            for k in range(1, 4):
+                a._resize_move(ev(x - 4 * k, y - 4 * k))
+                self.frame()
+            self.assertIn(False, calls)
+            self.assertNotIn(True, calls)
+            a._drag_end(ev(x - 12, y - 12))
+            self.settle()
+        self.assertEqual(calls.count(True), len(frozen))
+        self.assertEqual(calls[-1], True)
+
+    def test_group_resize_release_exact(self):
+        a, b, c = self.group_of_three()
+        c.toggle_collapse(instant=True)             # a folded member keeps its folded height
+        self.settle()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        a._resize_start(ev(x, y))
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        a._drag_end(ev(x - 20, y - 20))
+        self.app.root.update_idletasks()
+        from geom import shown_h
+        for o in (a, b, c):                         # the size at once (no frame at the window's big size)
+            self.assertEqual((o.win.winfo_width(), o.win.winfo_height()), (o.pad.width, shown_h(o.pad)), o.pad.id)
+        self.settle()
+        for o in (a, b, c):
+            p = o.pad
+            self.assertEqual((o.win.winfo_rootx(), o.win.winfo_rooty(), o.win.winfo_width(), o.win.winfo_height()),
+                             (p.x, p.y, p.width, shown_h(p)), p.id)
+            self.assertIsNone(getattr(o, "_clip", None))
+            self.assertIsNone(o._cover)
+        self.assertTrue(c.pad.collapsed)
+
+
 if __name__ == "__main__":
     unittest.main()
