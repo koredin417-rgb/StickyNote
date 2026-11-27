@@ -194,5 +194,59 @@ class FirstFrameTest(unittest.TestCase):
         self.assertTrue(self.clock.fine_timer_held)
 
 
+class HalfRateTest(unittest.TestCase):
+    """B2: every second vblank only under sustained load: the median of the last 6 ticks' work,
+    entering above 0.8 x period and leaving below 0.55 x; done callbacks and an animation's
+    first tick are not counted; going idle forgets it all."""
+    setUp, tearDown, run_for = ClockTest.setUp, ClockTest.tearDown, ClockTest.run_for
+    P = 0.0139
+
+    def test_hysteresis(self):
+        c = self.clock
+        c._work = [0.012] * 6
+        self.assertEqual(c._every(self.P), 2)
+        c._work = [0.009] * 6
+        self.assertEqual(c._every(self.P), 2)       # between the two lines: stays
+        c._work = [0.007] * 6
+        self.assertEqual(c._every(self.P), 1)
+        c._work = [0.012] * 5
+        self.assertEqual(c._every(self.P), 1)       # too few to say, from rest
+        c._work = [0.02] * 6
+        self.assertEqual(c._every(0.0167), 1)       # a 60 Hz display is never halved
+
+    def test_one_heavy_tick_does_not_halve(self):
+        self.clock._work = [0.002] * 5 + [0.05]
+        self.assertEqual(self.clock._every(self.P), 1)
+
+    def test_idle_clears_work(self):
+        c = self.clock
+        c._work, c._half = [0.02] * 6, True
+        c.animate(self.root, "x", 30, lambda k: None)
+        self.run_for(0.3)
+        self.assertEqual((c._work, c._half), ([], False))
+
+    def test_done_not_counted(self):
+        c = self.clock
+        c.animate(self.root, "light", 300, lambda k: None)
+        c.animate(self.root, "short", 30, lambda k: None, lambda: time.sleep(0.025))
+        self.run_for(0.15)
+        self.assertTrue(c._work)
+        self.assertLess(max(c._work), 0.010)
+
+    def test_first_tick_not_counted(self):
+        c, calls = self.clock, []
+        c.animate(self.root, "light", 300, lambda k: None)
+        self.run_for(0.05)
+
+        def heavy_first_tick(k):
+            calls.append(k)
+            if len(calls) == 2:                     # (call 1 is the start step, inside animate)
+                time.sleep(0.025)
+        c.animate(self.root, "new", 200, heavy_first_tick)
+        self.run_for(0.1)
+        self.assertGreater(len(calls), 2)
+        self.assertLess(max(c._work), 0.010)
+
+
 if __name__ == "__main__":
     unittest.main()

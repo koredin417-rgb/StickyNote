@@ -64,7 +64,9 @@ FINE_RELEASE_S = 0.5            # the 1 ms timer is given back this long after t
 IDLE_S = 1.0                    # idle work (gc, idle()) once the clock has been quiet this long
 IDLE_REPEAT_S = 10.0            # ... and garbage is collected at most this often while it stays quiet
 HALF_RATE_BELOW = 0.0155        # a display faster than ~65 Hz may be stepped every second vblank ...
-HALF_RATE_WORK = 0.5            # ... once the last frames' work takes more than this share of a period
+HALF_RATE_WINDOW = 6            # ... decided on the median work of the last this many ticks (B2):
+HALF_RATE_ENTER = 0.8           # above this share of a period it steps every second vblank,
+HALF_RATE_LEAVE = 0.55          # below this share it goes back to every vblank (between: it stays)
 SKIP_MS = 1                     # Animations Off (or Reduced, for movement): it ends at the next frame, never
                                 # inside the call that started it (a done that destroys a window would run
                                 # before the caller's next line)
@@ -126,7 +128,8 @@ class FrameClock:
         self._grid0: float | None = None            # the loop's start: the fallback grid
         self._timing = None                         # (vblank, period) or None
         self._timing_at = -1.0
-        self._work: list[float] = []                # the last ticks' work, seconds
+        self._work: list[float] = []                # the last ticks' work, seconds (no done, no first ticks)
+        self._half = False                          # stepping every second vblank (_every)
         self._fine = False
         self._fine_job = None
         self._idle_fns: list = []
@@ -287,14 +290,28 @@ class FrameClock:
             vblank, period = self._grid0, GRID
         else:
             vblank, period = timing
-        recent = self._work[-10:]
-        every = 2 if (period < HALF_RATE_BELOW and recent
-                      and sum(recent) / len(recent) > HALF_RATE_WORK * period) else 1
-        delay = max(1, round((next_deadline(now, vblank, period, every) - now) * 1000))
+        delay = max(1, round((next_deadline(now, vblank, period, self._every(period)) - now) * 1000))
         try:
             self._job = self.root.after(delay, self._tick)
         except tk.TclError:
             self._job = None
+
+    def _every(self, period: float) -> int:
+        """1: step at every vblank; 2: every second one, while the work of a frame stays too heavy
+        for a fast display (B2). One heavy tick changes nothing: it is the median of the last
+        HALF_RATE_WINDOW ticks, with hysteresis. Too few ticks to say: as it was."""
+        if not period or period >= HALF_RATE_BELOW:
+            self._half = False
+            return 1
+        recent = sorted(self._work[-HALF_RATE_WINDOW:])
+        if len(recent) >= HALF_RATE_WINDOW:
+            n = len(recent)
+            median = (recent[(n - 1) // 2] + recent[n // 2]) / 2
+            if median > HALF_RATE_ENTER * period:
+                self._half = True
+            elif median < HALF_RATE_LEAVE * period:
+                self._half = False
+        return 2 if self._half else 1
 
     def _report(self) -> None:
         try:
@@ -316,13 +333,14 @@ class FrameClock:
                 fn()
             except Exception:
                 self._report()
-        finished, logged = [], set()
+        finished, logged, first = [], set(), False
         period = self._period()
         for k, a in list(self._anims.items()):
             if self._anims.get(k) is not a:
                 continue                            # replaced or stopped by an earlier step
             if a.t0 is None:                        # its first frame: one frame in (B1), however long
                 a.t0 = now - period                 # the work between its start and this frame took
+                first = True                        # (a first step builds things: not the frame's load, B2)
             s = a.progress(now)
             try:
                 if a.tween:
@@ -344,13 +362,14 @@ class FrameClock:
                     del self._anims[k]
                 finished.append(a)
         self._flush(now)
+        if not first:                               # the frame's own work: steps and moves, no done (B2)
+            self._work = (self._work + [time.perf_counter() - now])[-HALF_RATE_WINDOW:]
         for a in finished:
             if a.done is not None:
                 try:
                     a.done()
                 except Exception:
                     self._report()
-        self._work = (self._work + [time.perf_counter() - now])[-10:]
         if self.busy:
             if self._job is None:
                 self._schedule()
@@ -428,6 +447,7 @@ class FrameClock:
     # ---- going quiet ------------------------------------------------------------------------
     def _went_idle(self) -> None:
         self._grid0 = None
+        self._work, self._half = [], False          # the next motion starts at full rate (B2)
         self._idle_since = time.perf_counter()
         try:
             self._fine_job = self.root.after(int(FINE_RELEASE_S * 1000), self._release_fine)
