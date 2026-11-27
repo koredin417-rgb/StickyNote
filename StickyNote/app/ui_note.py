@@ -209,7 +209,7 @@ class NoteWindow:
                                     height=DATE_ROW_H - 2)
         self.btn_close.pack(side="right", padx=(0, px(4)))
         # minimize, left of the close button (picked option B, 2026-11-27): "Top bar only" folds
-        self.btn_min = IconButton(bar, app, GLYPH["minimize"], self.minimize_button, tr("menu_minimize"), width=30,
+        self.btn_min = IconButton(bar, app, GLYPH["minimize"], self._min_click, tr("menu_minimize"), width=30,
                                   height=DATE_ROW_H - 2)
         self.btn_min.pack(side="right")
         # today's day, big, with the month and weekday beside it (folded: the memo's lines; on
@@ -400,8 +400,9 @@ class NoteWindow:
         if self.pad.collapsed and getattr(self, "_built", False):   # e.g. a day clicked in the calendar
             self.toggle_collapse()
         self._end_page_change()
-        before = self._page_area_picture() if view != getattr(self, "view", view) else None
-        forward = view != "home"
+        old_view = getattr(self, "view", view)
+        before = self._page_area_picture() if view != old_view else None
+        forward = PAGE_DEPTH.get(view, 1) >= PAGE_DEPTH.get(old_view, 0)
         self.view = view
         PopupMenu.close_current()
         self.list_view.hide_preview()
@@ -442,7 +443,27 @@ class NoteWindow:
         if box[2] - box[0] < 2 or box[3] - box[1] < 2:
             return None
         shot = self.app.shots.fresh(self)
-        return None if shot is None else (shot.crop(box).convert("RGB"), box)
+        if shot is None:
+            return None
+        img = shot.crop(box).convert("RGB")
+        bg = tuple(round(v * 255) for v in _rgb(self.win, self.colors.bg))
+        draw = ImageDraw.Draw(img)
+        for x0, y0, x1, y1 in self._page_overlays():  # (the Undo bar and tips stay live: not in the picture)
+            draw.rectangle((x0 - box[0], y0 - box[1], x1 - box[0] - 1, y1 - box[1] - 1), fill=bg)
+        return img, box
+
+    def _page_overlays(self):
+        """Where (in the window) what floats over the pages shows: the Undo / notice bar, the tips."""
+        out = []
+        try:
+            wx, wy = self.win.winfo_rootx(), self.win.winfo_rooty()
+            for w in (getattr(self, "toast", None), getattr(self, "hints", None)):
+                if w is not None and w.winfo_exists() and w.winfo_ismapped():
+                    x, y = w.winfo_rootx() - wx, w.winfo_rooty() - wy
+                    out.append((x, y, x + w.winfo_width(), y + w.winfo_height()))
+        except tk.TclError:
+            pass
+        return out
 
     def _page_change(self, before, forward):
         """The new page is live under a picture of the old one: the picture, in a click-through
@@ -466,15 +487,18 @@ class NoteWindow:
             photo = ImageTk.PhotoImage(old, master=top)
             item = cv.create_image(0, 0, anchor="nw", image=photo)
             cv._photo = photo
+            top._old, top._box = old, box
             top.geometry(f"{w}x{h}+{x0}+{y0}")
             alpha = min(self.pad.alpha, 0.999)      # (click-through: below 1.0, see winapi.set_click_through)
             top.attributes("-alpha", alpha)
             top.attributes("-topmost", bool(self.pad.pinned))
             top.deiconify()
             winapi.set_click_through(top, True)          # (clicks reach the new page under it)
-            if self.edge == 0:                          # its corners: rounded as the note's (DWM's are off)
-                winapi.clip_box(top, w, h, self.app.px(8))
-            top.lift(self.win)
+            self.win.update_idletasks()                 # (the Undo bar's place on the new page)
+            holes = [(x0 - box[0], y0 - box[1], x1 - box[0], y1 - box[1]) for x0, y0, x1, y1 in self._page_overlays()]
+            if self.edge == 0 or holes:                 # its corners rounded as the note's (DWM's are off),
+                winapi.clip_box(top, w, h, self.app.px(8) if self.edge == 0 else 0, holes=holes)  # and the
+            top.lift(self.win)                          # live Undo bar / tips show through it
         except tk.TclError:
             return
         self._page_cover = top
@@ -1183,6 +1207,15 @@ class NoteWindow:
             self.win.geometry(f"{int(w)}x{int(h)}+{int(x)}+{int(y)}")    # (Tk's own record of it)
         except tk.TclError:
             pass
+
+    def _min_click(self):
+        """The minimize button on the date row: a double-click counts once (the first click folds it,
+        "Top bar only"; the second must not then send it to the taskbar)."""
+        now = time.monotonic()
+        if now - getattr(self, "_min_at", -1.0) < DOUBLE_CLICK_MS / 1000:
+            return
+        self._min_at = now
+        self.minimize_button()
 
     def minimize_button(self):
         """The minimize button. "Top bar only" (Settings): an open note folds up to its top bar

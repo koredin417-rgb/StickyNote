@@ -142,7 +142,7 @@ class CalendarHoverTest(FeedbackCase):
         self.settle()
         self.assertEqual(g.itemcget(g.find_withtag("hover")[0], "image"), str(cal._tile(c.hover, tw, th)))
         cal._set_hover(None)
-        self.assertTrue(self.app.clock.active(g, "hover_out"))
+        self.assertTrue(any(k[0] == id(g) and k[1].startswith("hover_out") for k in self.app.clock._anims))
         self.assertTrue(g.find_withtag("hover_out"))
         self.settle()
         self.assertFalse(g.find_withtag("hover_out"))
@@ -291,8 +291,10 @@ class CalendarSizeTest(FeedbackCase):
         cal = self.open()
         b, n = cal.btn_size, cal.btn_next
         self.assertEqual((b._bg, b._hover, b.ink_color), (n._bg, n._hover, n.ink_color))
-        self.assertEqual(OPTICAL_SCALE.get(GLYPH["expand"]), OPTICAL_SCALE.get(GLYPH["close"]))
-        self.assertEqual(OPTICAL_SCALE.get(GLYPH["shrink"]), OPTICAL_SCALE.get(GLYPH["close"]))
+        from ui_common import ICON_BOX
+        self.assertEqual(b.box, round(ICON_BOX * OPTICAL_SCALE[GLYPH["close"]]))     # (drawn as small as x)
+        self.assertNotIn(GLYPH["expand"], OPTICAL_SCALE)         # (the menu's Big / Small icons: full size)
+        self.assertNotIn(GLYPH["shrink"], OPTICAL_SCALE)
 
     def test_head_keeps_its_width(self):
         cal = self.open()
@@ -365,6 +367,92 @@ class PageChangeTest(FeedbackCase):
         self.settle()
         self.assertIsNone(nw._page_cover)
         self.assertTrue(nw.settings_view.frame.winfo_ismapped())
+
+
+
+class MinorFixesTest(FeedbackCase):
+    """The review's deferred minors, fixed (2026-11-27)."""
+
+    def click(self, b):
+        b.event_generate("<ButtonPress-1>", x=4, y=4)
+        b.event_generate("<ButtonRelease-1>", x=4, y=4)
+
+    def test_double_click_minus_only_folds(self):
+        nw = self.nw
+        self.app.set_motion("reduced")              # (the fold is at once: the second click finds it folded)
+        self.assertEqual(self.app.prefs.minimize_style, "bar")
+        self.click(nw.btn_min)
+        pump(self.app, timeout=0.1)                 # (inside DOUBLE_CLICK_MS: a double-click)
+        self.click(nw.btn_min)
+        self.settle()
+        self.assertTrue(nw.pad.collapsed)
+        self.assertFalse(nw.minimized)
+
+    def test_fading_menu_lets_clicks_through(self):
+        import ctypes
+        import winapi
+        menu = PopupMenu(self.app, self.nw.win).add("A", lambda: None)
+        menu.popup(400, 300)
+        self.settle()
+        top = menu.top
+        menu.close()
+        self.assertFalse(int(top.attributes("-disabled")))
+        ex = ctypes.windll.user32.GetWindowLongW(winapi.hwnd_of(top), winapi.GWL_EXSTYLE)
+        self.assertTrue(ex & winapi.WS_EX_TRANSPARENT)
+
+    def test_back_from_bin_slides_back(self):
+        nw, px = self.nw, self.app.px
+        nw._show_view("list")
+        self.settle()
+        nw._show_view("bin")
+        self.assertEqual(nw._page_move, px(12))         # deeper: forward
+        self.settle()
+        nw._show_view("list")
+        self.assertEqual(nw._page_move, -px(12))        # back up
+        self.settle()
+
+    def test_quick_sweep_keeps_fading_days(self):
+        from datetime import date
+        self.nw.toggle_calendar()
+        self.settle()
+        cal = self.nw.calendar
+        g = cal.grid
+        days = [c[4] for c in cal._cells if c[4].month == cal.month[1] and c[4] != date.today()
+                and c[4].isoformat() != cal.selected]
+        cal._set_hover(days[2])
+        self.settle()
+        cal._set_hover(days[3])
+        cal._set_hover(days[4])                        # (a quick sweep: the first still fading out)
+        self.assertEqual(len(g.find_withtag("hover_out")), 2)
+        self.settle()
+        self.assertEqual(len(g.find_withtag("hover_out")), 0)
+
+    def test_page_picture_leaves_out_the_toast(self):
+        import winapi
+        nw = self.nw
+        nw.show_notice("hello")
+        self.settle()
+        t = nw.toast
+        self.assertTrue(t.winfo_ismapped())
+        old = (t.winfo_rootx(), t.winfo_rooty(), t.winfo_width(), t.winfo_height())
+        cut = []
+        real = winapi.clip_box
+
+        def clip(win, w, h, radius=0, redraw=False, holes=()):
+            cut.extend(holes)
+            return real(win, w, h, radius, redraw, holes)
+        with patched(winapi, "clip_box", clip):
+            nw._show_view("list")
+        cover = nw._page_cover
+        img, box = cover._old, cover._box                  # (the page's picture, its box in the window)
+        wx, wy = nw.win.winfo_rootx(), nw.win.winfo_rooty()
+        x0, y0 = old[0] - wx - box[0], old[1] - wy - box[1]
+        bg = img.getpixel((max(0, x0 - 1), max(0, y0 - 1))) if x0 > 0 and y0 > 0 else None
+        patch = img.crop((max(0, x0), max(0, y0), min(img.width, x0 + old[2]), min(img.height, y0 + old[3])))
+        self.assertEqual(len(set(patch.getdata())), 1, "the old toast is still in the picture")
+        self.assertTrue(cut, "the live toast is not cut out of the cover")
+        self.settle()
+        del bg
 
 
 if __name__ == "__main__":

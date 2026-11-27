@@ -211,7 +211,9 @@ class CalendarPopup:
         self.btn_more.pack(side="right")
         # small <-> big in one click (picked 2026-11-27, with the head's double-click): its icon and tip
         # say what it does next (_show_size_button)
-        self.btn_size = top_button(GLYPH["expand"], self.toggle_expand, tr("menu_cal_big"))
+        self.btn_size = IconButton(head, self.app, GLYPH["expand"], self.toggle_expand, tr("menu_cal_big"),
+                                   height=TOP_BUTTON_H, width=CAL_HEAD_BUTTON_W,     # (its icon fills the box's
+                                   box=round(ICON_BOX * OPTICAL_SCALE[GLYPH["close"]]))  # corners, like x)
         self.btn_size.pack(side="right")
         self._show_size_button()
         self.btn_next = top_button(GLYPH["next"], self.next_month, tr("tip_next_month"))
@@ -1854,21 +1856,23 @@ class CalendarPopup:
                         ease=anim.ease_out if on else anim.ease_in, kind="fade")
             return
         ramp, shown = self._hover_ramp(), getattr(self, "_hover_shown", None)
-        clock.stop(g, "hover_out")
-        g.delete("hover_out")                       # (an earlier day still fading out goes now)
+        keys = self.__dict__.setdefault("_hover_keys", set())
         if shown is not None and g.find_withtag("hover"):
             clock.stop(g, "hover_in")
-            if fade and shown[2] > 0:               # the day left fades out from where it got
-                g.itemconfigure("hover", tags=("hover_out",))
+            if fade and shown[2] > 0:               # the day left fades out from where it got (each its
+                self._hover_n = getattr(self, "_hover_n", 0) + 1        # own: a quick sweep fades them all)
+                tag = f"hover_out{self._hover_n}"
+                g.itemconfigure("hover", tags=("hover_out", tag))
                 tw, th, i0 = shown
+                keys.add(tag)
 
-                def out(k, tw=tw, th=th, i0=i0):
+                def out(k, tw=tw, th=th, i0=i0, tag=tag):
                     i = round(i0 * (1 - k))
                     if i:
-                        g.itemconfigure("hover_out", image=self._tile(ramp[i - 1], tw, th))
+                        g.itemconfigure(tag, image=self._tile(ramp[i - 1], tw, th))
                     else:
-                        g.delete("hover_out")
-                animate(g, "hover_out", CAL_HOVER_OUT_MS, out, lambda: g.delete("hover_out"),
+                        g.delete(tag)
+                animate(g, tag, CAL_HOVER_OUT_MS, out, lambda tag=tag: (g.delete(tag), keys.discard(tag)),
                         ease=anim.ease_in, kind="fade")
         g.delete("hover")
         self._hover_shown = None

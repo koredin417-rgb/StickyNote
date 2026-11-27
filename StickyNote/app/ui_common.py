@@ -57,8 +57,7 @@ ICON_BOX = 14                    # every bar icon is drawn this big (px at 100 %
 SMALL_ICON_BOX = 12              # icons inside the list
 SECTION_ICON_BOX = 9             # ▾ / ▸ and the sort icon beside the list's small part heads (8 pt text)
 BIN_ICON_BOX = 18                # the bin's icon under the memo list (px at 100 %)
-OPTICAL_SCALE = {GLYPH["minimize"]: 0.8, GLYPH["close"]: 0.8,    # they fill the box corners: draw smaller
-                 GLYPH["expand"]: 0.8, GLYPH["shrink"]: 0.8}
+OPTICAL_SCALE = {GLYPH["minimize"]: 0.8, GLYPH["close"]: 0.8}   # they fill the box corners: draw smaller
 UI_FONT = texts.UI_FONTS[texts.DEFAULT]    # changes with the language (Korean: Malgun Gothic)
 UI_BOLD = texts.UI_BOLD_FONTS[texts.DEFAULT]     # bold UI text: (UI_BOLD, size, "bold")
 
@@ -132,6 +131,7 @@ CAL_SLIDE = 8                    # ... this far (px at 100 %)
 HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
 PAGE_MS = anim.BASE              # moving between the memo, list, settings and bin pages: the new one fades in
 PAGE_SHIFT = 12                  # ... sliding this far (px at 100 %): forward from the right, back from the left
+PAGE_DEPTH = {"home": 0, "list": 1, "settings": 1, "bin": 2}   # deeper (or level) is forward: the bin is in the list
 CAL_HEAD_BUTTON_W = 20           # the calendar head's buttons (px at 100 %): six of them fill what five of 24 did
 CAL_HOVER_IN_MS, CAL_HOVER_OUT_MS = anim.FAST, anim.BASE   # a day under the mouse fades in, the one left out ...
 CAL_HOVER_STEPS = 5              # ... through this many colours (a fixed ramp: no new picture per frame)
@@ -409,12 +409,14 @@ def menu_out(win) -> None:
             win.destroy()
         except tk.TclError:
             pass
-    try:
-        win.attributes("-disabled", True)
+    try:                                    # click-through while it fades (clicks reach what is under it;
+        a0 = min(_alpha(win), 0.999)        # a disabled window would eat them, with a ding): below 1.0
+        win.attributes("-alpha", a0)
+        winapi.set_click_through(win, True)
     except tk.TclError:
         gone()
         return
-    fade(win, "show", _alpha(win), 0.0, anim.exit_ms(MENU_FADE_MS), done=gone, ease=anim.ease_in)
+    fade(win, "show", a0, 0.0, anim.exit_ms(MENU_FADE_MS), done=gone, ease=anim.ease_in)
 
 
 def _alpha(win) -> float:
