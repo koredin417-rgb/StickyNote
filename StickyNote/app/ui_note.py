@@ -399,6 +399,9 @@ class NoteWindow:
     def _show_view(self, view):
         if self.pad.collapsed and getattr(self, "_built", False):   # e.g. a day clicked in the calendar
             self.toggle_collapse()
+        self._end_page_change()
+        before = self._page_area_picture() if view != getattr(self, "view", view) else None
+        forward = view != "home"
         self.view = view
         PopupMenu.close_current()
         self.list_view.hide_preview()
@@ -418,6 +421,70 @@ class NoteWindow:
         self.bump_look()
         tk.Misc.tkraise(self.grip)
         self._place_toast()
+        if before is not None:
+            self._page_change(before, forward)
+
+    # ---- moving between pages: the new one slides in 12 px and fades (picked option D) -------
+    def _page_area_picture(self):
+        """The page area as it shows now, (image, box in the window), when a page change may be
+        animated: built, showing, not folded or frozen or rolling, Animations not Off. Else None."""
+        clock = self.app.clock
+        try:
+            if (not getattr(self, "_built", False) or clock.mode == "off" or self.pad.collapsed
+                    or self._cover is not None or getattr(self, "_rolling_cover", None) is not None
+                    or not self.win.winfo_ismapped() or self.win.state() != "normal"):
+                return None
+            v = self.views
+            x, y = v.winfo_rootx() - self.win.winfo_rootx(), v.winfo_rooty() - self.win.winfo_rooty()
+            box = (x, y, x + v.winfo_width(), y + v.winfo_height())
+        except tk.TclError:
+            return None
+        if box[2] - box[0] < 2 or box[3] - box[1] < 2:
+            return None
+        shot = self.app.shots.fresh(self)
+        return None if shot is None else (shot.crop(box).convert("RGB"), box)
+
+    def _page_change(self, before, forward):
+        """The new page (just laid out) comes in over the old one's picture: a cover over the page
+        area blends from the old picture to the new one over PAGE_MS while both slide PAGE_SHIFT px
+        (forward: in from the right; back: from the left). Reduced: the fade only."""
+        old, box = before
+        self.win.update_idletasks()
+        after = self._page_area_picture()
+        if after is None or after[1] != box:
+            return
+        new = after[0]
+        clock, c = self.app.clock, self.colors
+        shift = 0 if clock._instant("move") else self.app.px(PAGE_SHIFT)
+        self._page_move = shift if forward else -shift
+        w, h = old.size
+        photo = ImageTk.PhotoImage(old, master=self.views)
+        cover = tk.Canvas(self.views, bd=0, highlightthickness=0, bg=c.bg, width=w, height=h)
+        cover.create_image(0, 0, anchor="nw", image=photo)
+        cover._photo = photo
+        cover.place(x=0, y=0, width=w, height=h)
+        tk.Misc.tkraise(cover)
+        self._page_cover = cover
+        bg = tuple(round(v * 255) for v in _rgb(self.win, c.bg))
+        move = self._page_move
+
+        def frame(t):
+            s, a = anim.ease_out(t), anim.smoothstep(t)
+            a_img = Image.new("RGB", (w, h), bg)
+            a_img.paste(old, (round(-move * s), 0))
+            b_img = Image.new("RGB", (w, h), bg)
+            b_img.paste(new, (round(move * (1 - s)), 0))
+            photo.paste(Image.blend(a_img, b_img, a))
+        animate(self.views, "page", PAGE_MS, frame, self._end_page_change, ease=lambda t: t, kind="fade")
+
+    def _end_page_change(self):
+        cover, self._page_cover = getattr(self, "_page_cover", None), None
+        if cover is not None:
+            stop_animation(self.views, "page")
+            try:
+                cover.destroy()
+            except tk.TclError:
+                pass
 
     def show_home(self):
         self._show_view("home")

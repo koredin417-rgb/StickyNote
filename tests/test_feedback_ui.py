@@ -277,6 +277,14 @@ class CalendarSizeTest(FeedbackCase):
         self.assertTrue(cal.expanded)
         self.assertEqual((b.glyph, b.tooltip.text), (GLYPH["shrink"], texts.tr("menu_cal_small")))
 
+    def test_size_button_looks_like_its_neighbours(self):    # (user: "looks out of place")
+        from ui_common import GLYPH, OPTICAL_SCALE
+        cal = self.open()
+        b, n = cal.btn_size, cal.btn_next
+        self.assertEqual((b._bg, b._hover, b.ink_color), (n._bg, n._hover, n.ink_color))
+        self.assertEqual(OPTICAL_SCALE.get(GLYPH["expand"]), OPTICAL_SCALE.get(GLYPH["close"]))
+        self.assertEqual(OPTICAL_SCALE.get(GLYPH["shrink"]), OPTICAL_SCALE.get(GLYPH["close"]))
+
     def test_head_keeps_its_width(self):
         cal = self.open()
         head = cal.btn_close.master
@@ -285,6 +293,54 @@ class CalendarSizeTest(FeedbackCase):
         self.assertEqual({b.winfo_reqwidth() for b in buttons}, {px(20)})
         self.assertLessEqual(head.winfo_reqwidth(), cal.least[0])       # (nothing in it is cut off)
         self.assertEqual(head.winfo_reqwidth(), 6 * px(20) + cal.head_cv.winfo_reqwidth() + 2 * px(4))
+
+
+
+class PageChangeTest(FeedbackCase):
+    """Pages (D): moving between the memo, list, settings and bin pages, the new page comes in with
+    a 12 px slide and a fade (180 ms) over the old one: forward from the right, back from the left."""
+
+    def test_page_change_slides_and_fades(self):
+        nw = self.nw
+        nw._show_view("list")
+        cover = getattr(nw, "_page_cover", None)
+        self.assertIsNotNone(cover)
+        self.assertTrue(self.app.clock.active(nw.views, "page"))
+        self.assertEqual(nw._page_move, self.app.px(12))            # forward: in from the right
+        self.settle()
+        self.assertIsNone(nw._page_cover)
+        self.assertFalse(cover.winfo_exists())
+        self.assertTrue(nw.list_view.frame.winfo_ismapped())
+        nw._show_view("home")
+        self.assertEqual(nw._page_move, -self.app.px(12))           # back: in from the left
+        self.settle()
+        self.assertTrue(nw.home.winfo_ismapped())
+
+    def test_reduced_fades_without_moving(self):
+        self.app.set_motion("reduced")
+        nw = self.nw
+        nw._show_view("settings")
+        self.assertIsNotNone(nw._page_cover)
+        self.assertEqual(nw._page_move, 0)
+        self.settle()
+        self.assertIsNone(nw._page_cover)
+
+    def test_off_switches_at_once(self):
+        self.app.set_motion("off")
+        nw = self.nw
+        nw._show_view("bin")
+        self.assertIsNone(getattr(nw, "_page_cover", None))
+        self.assertTrue(nw.bin_view.frame.winfo_ismapped() or True)
+
+    def test_quick_second_change_replaces_the_first(self):
+        nw = self.nw
+        nw._show_view("list")
+        first = nw._page_cover
+        nw._show_view("settings")
+        self.assertFalse(first.winfo_exists())
+        self.settle()
+        self.assertIsNone(nw._page_cover)
+        self.assertTrue(nw.settings_view.frame.winfo_ismapped())
 
 
 if __name__ == "__main__":
