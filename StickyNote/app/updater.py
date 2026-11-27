@@ -156,8 +156,9 @@ class Updater:
     App._update_poll) applies them and tells the ``listeners`` (the open Update pages)."""
 
     def __init__(self, app_dir: Path, *, get=webget.get, download=webget.download, popen=subprocess.Popen,
-                 temp_dir: Path | None = None, install_dir: Path | None = None):
+                 temp_dir: Path | None = None, install_dir: Path | None = None, data_folder: Path | None = None):
         self.app_dir = Path(app_dir)
+        self.data_folder = Path(data_folder) if data_folder is not None else None    # (the installer's result file)
         self._get, self._download, self._popen = get, download, popen
         self.temp_dir = Path(temp_dir) if temp_dir is not None else Path(tempfile.gettempdir())
         self.install_dir = Path(install_dir) if install_dir is not None else install.default_dest()
@@ -293,11 +294,21 @@ class Updater:
             return
         self._send(state="installing", progress=1.0)
         try:                                    # it closes this app over waker ("quit") and reopens it
-            self._popen([str(root / "runtime" / "python.exe"), str(root / "app" / "install.py"),
-                         "--yes", "--dest", str(self.install_dir)],
-                        cwd=str(root / "app"), close_fds=True, creationflags=LAUNCH_FLAGS,
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = self._popen([str(root / "runtime" / "python.exe"), str(root / "app" / "install.py"),
+                                "--yes", "--dest", str(self.install_dir)],
+                               cwd=str(root / "app"), close_fds=True, creationflags=LAUNCH_FLAGS,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
+            self._send(state="error", error="upd_err_start")
+            return
+        # Normally this app is closed while waiting here. An installer that ends first never got
+        # that far (it died, or couldn't close the app and said so in its result file).
+        if proc.wait() == 0:
+            return
+        result = read_result(self.data_folder) if self.data_folder is not None else None
+        if result is not None and not result["ok"]:
+            self._send(state="error", error="upd_err_install", error_detail=str(result.get("error", "")))
+        else:
             self._send(state="error", error="upd_err_start")
 
 

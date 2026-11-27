@@ -165,7 +165,7 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
         self.signal_file = signal_file
         self._today = date.today()
         # Settings → Update: one for the app, so every note's Update page shows the same check
-        self.updater = _updater.Updater(Path(_updater.__file__).resolve().parent)
+        self.updater = _updater.Updater(Path(_updater.__file__).resolve().parent, data_folder=Path(folder))
         self._update_job = None
 
         data = self.store.load()

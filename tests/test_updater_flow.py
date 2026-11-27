@@ -28,6 +28,16 @@ def make_zip(path: Path, version="1.2.0", extra=None) -> Path:
     return path
 
 
+class FakeProc:
+    """The installer as Popen gives it: wait() is how it ended (in real use it closes this app first)."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def wait(self, timeout=None):
+        return self.code
+
+
 def reply(tag="v1.2.0", size=0, sha=None) -> bytes:
     return json.dumps({"tag_name": tag, "body": "## New\n* faster", "draft": False, "prerelease": False,
                        "assets": [{"name": "StickyNote.zip", "browser_download_url": "https://example.test/z",
@@ -45,7 +55,9 @@ class UpdaterFlowTest(unittest.TestCase):
         self.body = None            # what get answers (None: a release of self.zip)
         self.get = Spy(wraps=lambda url, headers: self.body if self.body is not None else self._reply())
         self.download = Spy(wraps=self._download)
-        self.popen = Spy()
+        self.code = 0               # how the installer ends (0: it closed this app and installed)
+        self.popen = Spy(wraps=lambda *a, **k: FakeProc(self.code))
+        self.data = self.tmp / "data"
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -64,7 +76,8 @@ class UpdaterFlowTest(unittest.TestCase):
 
     def updater(self, app_dir=None):
         return Updater(app_dir or self.install_dir / "app", get=self.get, download=self.download,
-                       popen=self.popen, temp_dir=self.temp, install_dir=self.install_dir)
+                       popen=self.popen, temp_dir=self.temp, install_dir=self.install_dir,
+                       data_folder=self.data)
 
     def drain(self, u):
         end = time.perf_counter() + 2
@@ -264,6 +277,25 @@ class UpdaterFlowTest(unittest.TestCase):
         u = self.updater()
         self.installed(u)
         self.assertEqual((u.state, u.error), ("error", "upd_err_start"))
+
+    def test_installer_ends_without_closing_app(self):     # it died: a broken zip's installer, an antivirus
+        self.code = 1
+        u = self.updater()
+        self.installed(u)
+        self.assertEqual((u.state, u.error), ("error", "upd_err_start"))
+
+    def test_installer_reports_still_running(self):        # it couldn't close this app: said so, ended
+        self.code = 1
+        self.data.mkdir()
+        (self.data / "update-result.json").write_text(
+            '{"version": "1.2.0", "ok": false, "error": "still running"}', "utf-8")
+        u = self.updater()
+        self.installed(u)
+        self.assertEqual((u.state, u.error, u.error_detail), ("error", "upd_err_install", "still running"))
+        self.assertFalse((self.data / "update-result.json").exists())
+        u.check()                                           # and a new check is possible again
+        self.drain(u)
+        self.assertEqual(u.state, "available")
 
     def test_elsewhere_never_installs(self):
         u = self.updater(app_dir=self.tmp / "repo" / "StickyNote" / "app")

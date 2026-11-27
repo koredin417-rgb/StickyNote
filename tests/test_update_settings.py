@@ -159,6 +159,10 @@ class UpdateSettingsTest(unittest.TestCase):
         sv = self.open_page(nw)
         self.assertIn(tr("upd_err_install", e="disk"), shown_texts(sv.pages["set_update"]))
 
+    def test_app_updater_reads_its_data_folder(self):    # where a failed installer's result file lands
+        self.app = make_app(self.folder)
+        self.assertEqual(self.app.updater.data_folder, self.folder)
+
     def test_texts_complete(self):
         keys = ["set_update", "help_update", "upd_installed", "upd_check", "upd_checking", "upd_latest",
                 "upd_new", "upd_now", "upd_later", "upd_downloading", "upd_installing", "upd_elsewhere",
