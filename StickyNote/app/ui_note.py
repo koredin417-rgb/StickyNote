@@ -1131,11 +1131,15 @@ class NoteWindow:
             self.app.space_changed()
             self.app.arrange_soon()         # auto layout: the others close up
 
-        if not animate:
+        mode = self.app.clock.mode          # (B9: Off just goes; Reduced fades, no roll and no picture)
+        if not animate or mode == "off":
             self.rolling = True
             finish()
             return
         self.rolling = True
+        if mode == "reduced":
+            fade(win, "fade", alpha, 0.0, CLOSE_FADE_MS, done=finish, ease=anim.ease_in)
+            return
         bar, slide = min(shown, self.collapsed_height()), px(40)
         self._roll_cover(self._shot())
 
@@ -1174,6 +1178,14 @@ class NoteWindow:
             self.app.return_note(self, "restore")
 
         win.attributes("-alpha", 0.0)
+        mode = self.app.clock.mode          # (B9: Off just comes back; Reduced fades in, no roll)
+        animate = animate and mode != "off"
+        if animate and mode == "reduced":
+            self._roll_geometry(shown)
+            win.deiconify()
+            self.minimized = False
+            fade(win, "fade", 0.0, alpha, OPEN_FADE_MS, done=finish)
+            return
         if animate:                         # its picture from when it went, if it still looks that way
             self._roll_cover(self._kept_shot(shown))
         self._roll_geometry(bar if animate else shown, slide if animate else 0)
@@ -1966,7 +1978,7 @@ class NoteWindow:
             b.tag_raise("done_fade")
             animate(b, "done_fade", DONE_FADE_MS,
                     lambda k: b.tag_configure("done_fade", foreground=_mix(b, c.fg, c.muted, k)),
-                    lambda: b.tag_remove("done_fade", "1.0", "end"))
+                    lambda: b.tag_remove("done_fade", "1.0", "end"), kind="fade")
 
     def remove_todo(self, row):
         """Take the to-do line ``row`` out; Undo in the bottom bar puts it back."""
@@ -2741,7 +2753,7 @@ class NoteWindow:
         self.user_moved(moved=False)
         if self.rolling:
             return
-        if instant or not self.win.winfo_ismapped():
+        if instant or not self.win.winfo_ismapped() or self.app.clock.mode != "full":   # (B9: no roll)
             self.app.set_folded([self], not p.collapsed)     # one plan: closes up linked / pushes (no Undo)
             self.app.request_save()
         elif not p.collapsed:
@@ -2822,7 +2834,7 @@ class NoteWindow:
                 w.configure(bg=c.bg)
             for b in buttons:
                 b.configure(bg=b._rest())
-        animate(win, "flash", FLASH_MS, step, done, ease=lambda t: t)
+        animate(win, "flash", FLASH_MS, step, done, ease=lambda t: t, kind="fade")
 
     def _on_configure(self, event):
         if event.widget is not self.win:

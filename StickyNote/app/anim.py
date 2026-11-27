@@ -95,6 +95,10 @@ def next_deadline(now: float, vblank: float | None, period: float | None, every:
     return vblank + k * step - EARLY
 
 
+def _no_step(_k) -> None:
+    pass
+
+
 class _Anim:
     __slots__ = ("owner", "key", "t0", "ms", "ease", "step", "done", "tween", "v0", "v1", "m", "scalar",
                  "write")
@@ -177,20 +181,30 @@ class FrameClock:
         """Do the window moves queued for this frame now (a gesture let go before the frame)."""
         self._flush(time.perf_counter())
 
-    def animate(self, owner, key: str, ms: int, step, done=None, ease=ease_out) -> None:
+    def _instant(self, kind: str) -> bool:
+        """The Animations setting (B9): Off ends everything at once; Reduced ends movement at once
+        and keeps fades (opacity and colour changes)."""
+        return self.mode == "off" or (self.mode == "reduced" and kind != "fade")
+
+    def animate(self, owner, key: str, ms: int, step, done=None, ease=ease_out, kind: str = "move") -> None:
         """``step(ease(t))`` once a frame for ``ms``, t from 0 to 1, then ``done()``. The same
         (owner, key) again replaces the running one (its done is not called). A TclError from
-        step (the widget is gone) ends it quietly. It takes its first step at once."""
+        step (the widget is gone) ends it quietly. It takes its first step at once. ``kind``:
+        "move" or "fade" (the Animations setting, _instant): an instant one takes its last step
+        at once, and its done comes at the next frame (never inside the call that started it)."""
         k = (id(owner), key)
         self._anims.pop(k, None)
-        if self.mode == "off" or (self.mode == "reduced" and ms > FAST):
-            ms = SKIP_MS                            # (the Animations setting: no motion; done at the next frame)
+        instant = self._instant(kind)
+        if instant:
+            ms = SKIP_MS
         a = _Anim(owner, key, None, ms, ease, done)       # (its clock starts at its first frame: _tick)
         a.step = step
         try:
-            step(ease(a.progress(0.0)))
+            step(ease(1.0 if instant else a.progress(0.0)))
         except tk.TclError:
             return
+        if instant:
+            a.step = _no_step                       # (its end is shown: the frame only runs its done)
         if a.progress(0.0) >= 1.0:
             if done is not None:
                 done()
@@ -199,17 +213,21 @@ class FrameClock:
         self._wake()
 
     def tween(self, owner, channel: str, to, ms: int, *, read, write, ease=ease_out, frm=None,
-              done=None) -> None:
+              done=None, kind: str | None = None) -> None:
         """Move a value (a float or a tuple of floats) to ``to`` over ``ms``. If (owner, channel)
-        is moving already it turns toward ``to`` from where it is, keeping its speed (no snap)."""
+        is moving already it turns toward ``to`` from where it is, keeping its speed (no snap).
+        ``kind``: "fade" or "move" (default: "alpha" is a fade, every other channel a move); an
+        instant one (_instant) is written at once, its done at the next frame."""
         k = (id(owner), channel)
         now = time.perf_counter()
-        if self.mode == "off" or (self.mode == "reduced" and channel != "alpha"):
-            ms = SKIP_MS                            # (the Animations setting: no motion; Reduced keeps fades)
-        elif self.mode == "reduced":
-            ms = min(ms, FAST)
         scalar = not isinstance(to, (tuple, list))
         v1 = (float(to),) if scalar else tuple(float(v) for v in to)
+        if self._instant(kind or ("fade" if channel == "alpha" else "move")):
+            self._anims.pop(k, None)
+            write(v1[0] if scalar else v1)          # (Off / Reduced: its end now, no start state first)
+            if done is not None:
+                self.animate(owner, channel, SKIP_MS, _no_step, done)
+            return
         old = self._anims.pop(k, None)
         vel = None
         if old is not None and old.tween:

@@ -297,7 +297,7 @@ class Motion:
         def done():
             self._fading.pop(item.id, None)
             self._got_there(item)
-        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t)
+        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t, kind="fade")
 
     def _alpha_back(self, pid, item):
         if pid == CAL:

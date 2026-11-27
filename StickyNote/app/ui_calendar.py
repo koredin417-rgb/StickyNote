@@ -995,7 +995,7 @@ class CalendarPopup:
             self._click_view_now(view)
             if not getattr(self, "_closing", False):
                 self.apply_alpha(animated=True)     # back to what it should be (HOVER_FADE_MS)
-        animate(top, "dip", VIEW_DIP_MS, out, switch)   # (its own key: the switch rides on nothing shared)
+        animate(top, "dip", VIEW_DIP_MS, out, switch, kind="fade")   # (its own key: the switch rides on nothing shared)
 
     def _click_view_now(self, view: str) -> None:
         """The switch itself: the choice is held (calendar_hold) until the stretch rule agrees with it."""
@@ -1194,7 +1194,7 @@ class CalendarPopup:
             return
         start = b.ink_color
         animate(b, "ink", anim.FAST, lambda k: b.set_ink(_mix(self.top, start, target, k)),
-                lambda: b.set_ink(target))
+                lambda: b.set_ink(target), kind="fade")
 
     def head_texts(self) -> list[str]:
         """What the head says, left to right (tests)."""

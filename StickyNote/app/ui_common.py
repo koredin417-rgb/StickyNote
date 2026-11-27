@@ -344,12 +344,12 @@ def _ease_out(t):
     return 1 - (1 - t) ** 3
 
 
-def animate(widget, key, ms, step, done=None, ease=_ease_out):
+def animate(widget, key, ms, step, done=None, ease=_ease_out, kind="move"):
     """Call ``step(k)`` once a frame for ``ms`` milliseconds, k easing (``ease``, out by
     default) from 0 to 1, then ``done()``: on the app's one frame clock (anim.FrameClock),
     paced to the display. The same key on the same widget replaces the running one. Stops
-    quietly when the widget is gone."""
-    anim.clock_of(widget).animate(widget, key, ms, step, done, ease)
+    quietly when the widget is gone. ``kind``: "move" or "fade" (Animations: Reduced keeps fades)."""
+    anim.clock_of(widget).animate(widget, key, ms, step, done, ease, kind)
 
 
 def stop_animation(widget, key):
@@ -1228,7 +1228,7 @@ class OverlayScroll:
         def step(k):
             self._k = 1.0 - k
             self._draw()
-        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True), ease=anim.ease_in)
+        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True), ease=anim.ease_in, kind="fade")
 
     def _geometry(self):
         """(x, y0, y1, w) of the thumb's line on the canvas."""
