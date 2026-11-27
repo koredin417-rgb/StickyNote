@@ -1053,7 +1053,9 @@ class CalendarPopup:
                 pad.calendar_hold = None                    # (a view click never undocks it: G7 is for a mini
                 side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view="mini", keep=True)  # that fits nowhere)
             if view == "big" and side is not None:         # big goes no further than the room on its side
-                rw, rh = self._room(cal_box, side)
+                a = app.area_of(note)                       # (the note's own screen: the big box's centre may be on
+                rw = (cal_box[2] - a[0]) if side == "left" else (a[2] - cal_box[0])     # the next one)
+                rh = (cal_box[3] - a[1]) if side == "above" else (a[3] - cal_box[1])
                 lw, lh = self._least_for("big")
                 if lw > rw or lh > rh:                      # not even its least fits: it stays mini
                     pad.calendar_hold = None

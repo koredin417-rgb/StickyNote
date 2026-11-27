@@ -79,6 +79,15 @@ class MenuMotionTest(FeedbackCase):
         pump(self.app, lambda: not top.winfo_exists(), timeout=0.5)
         self.assertFalse(top.winfo_exists())
 
+    def test_focus_check_after_close_is_quiet(self):   # (review: self.top is None once closed)
+        menu = self.open_menu()
+        menu.close()
+        errors = []
+        with patched(self.app.root, "report_callback_exception", lambda *a: errors.append(a)):
+            menu._check_focus()
+            menu._press(type("E", (), {"x_root": 0, "y_root": 0})())
+        self.assertEqual(errors, [])
+
     def test_menu_off_mode_closes_at_once(self):
         self.app.set_motion("off")
         menu = self.open_menu()
@@ -305,7 +314,7 @@ class PageChangeTest(FeedbackCase):
         nw._show_view("list")
         cover = getattr(nw, "_page_cover", None)
         self.assertIsNotNone(cover)
-        self.assertTrue(self.app.clock.active(nw.views, "page"))
+        self.assertTrue(self.app.clock.active(cover, "alpha"))      # (the old page's picture fades away)
         self.assertEqual(nw._page_move, self.app.px(12))            # forward: in from the right
         self.settle()
         self.assertIsNone(nw._page_cover)
@@ -315,6 +324,22 @@ class PageChangeTest(FeedbackCase):
         self.assertEqual(nw._page_move, -self.app.px(12))           # back: in from the left
         self.settle()
         self.assertTrue(nw.home.winfo_ismapped())
+
+    def test_one_picture_and_the_new_page_live_under_it(self):    # (review: the second picture was unpainted)
+        import shots
+        import tkinter as tk
+        nw, taken = self.nw, []
+        real_capture = shots.capture
+        with patched(shots, "capture", lambda win: (taken.append(1), real_capture(win))[1]):
+            nw._show_view("list")
+        self.assertEqual(len(taken), 1)                             # the old page only
+        cover = nw._page_cover
+        self.assertIsInstance(cover, tk.Toplevel)                   # over the note, not in it
+        self.assertEqual(nw.list_view.frame.winfo_manager(), "pack")   # the new page is live under it
+        self.assertTrue(self.app.clock.active(cover, "alpha"))      # the old page fades away
+        self.settle()
+        self.assertIsNone(nw._page_cover)
+        self.assertFalse(cover.winfo_exists())
 
     def test_reduced_fades_without_moving(self):
         self.app.set_motion("reduced")
@@ -330,7 +355,6 @@ class PageChangeTest(FeedbackCase):
         nw = self.nw
         nw._show_view("bin")
         self.assertIsNone(getattr(nw, "_page_cover", None))
-        self.assertTrue(nw.bin_view.frame.winfo_ismapped() or True)
 
     def test_quick_second_change_replaces_the_first(self):
         nw = self.nw

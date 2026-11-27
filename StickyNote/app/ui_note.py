@@ -445,42 +445,52 @@ class NoteWindow:
         return None if shot is None else (shot.crop(box).convert("RGB"), box)
 
     def _page_change(self, before, forward):
-        """The new page (just laid out) comes in over the old one's picture: a cover over the page
-        area blends from the old picture to the new one over PAGE_MS while both slide PAGE_SHIFT px
-        (forward: in from the right; back: from the left). Reduced: the fade only."""
+        """The new page is live under a picture of the old one: the picture, in a click-through
+        window over the page area, slides PAGE_SHIFT px away (forward: to the left; back: to the
+        right) and fades out over PAGE_MS, so the new page comes through it. Only the old page is
+        photographed (it shows, painted): the new one is never captured before Windows paints it
+        (spec, Phase 4). Reduced: the fade only."""
         old, box = before
-        self.win.update_idletasks()
-        after = self._page_area_picture()
-        if after is None or after[1] != box:
-            return
-        new = after[0]
         clock, c = self.app.clock, self.colors
         shift = 0 if clock._instant("move") else self.app.px(PAGE_SHIFT)
         self._page_move = shift if forward else -shift
         w, h = old.size
-        photo = ImageTk.PhotoImage(old, master=self.views)
-        cover = tk.Canvas(self.views, bd=0, highlightthickness=0, bg=c.bg, width=w, height=h)
-        cover.create_image(0, 0, anchor="nw", image=photo)
-        cover._photo = photo
-        cover.place(x=0, y=0, width=w, height=h)
-        tk.Misc.tkraise(cover)
-        self._page_cover = cover
-        bg = tuple(round(v * 255) for v in _rgb(self.win, c.bg))
+        try:
+            x0, y0 = self.win.winfo_rootx() + box[0], self.win.winfo_rooty() + box[1]
+            top = tk.Toplevel(self.win)
+            top.withdraw()
+            top.overrideredirect(True)
+            top.configure(bg=c.bg)
+            cv = tk.Canvas(top, bd=0, highlightthickness=0, bg=c.bg, width=w, height=h)
+            cv.pack(fill="both", expand=True)
+            photo = ImageTk.PhotoImage(old, master=top)
+            item = cv.create_image(0, 0, anchor="nw", image=photo)
+            cv._photo = photo
+            top.geometry(f"{w}x{h}+{x0}+{y0}")
+            alpha = min(self.pad.alpha, 0.999)      # (click-through: below 1.0, see winapi.set_click_through)
+            top.attributes("-alpha", alpha)
+            top.attributes("-topmost", bool(self.pad.pinned))
+            top.deiconify()
+            winapi.set_click_through(top, True)          # (clicks reach the new page under it)
+            if self.edge == 0:                          # its corners: rounded as the note's (DWM's are off)
+                winapi.clip_box(top, w, h, self.app.px(8))
+            top.lift(self.win)
+        except tk.TclError:
+            return
+        self._page_cover = top
         move = self._page_move
 
-        def frame(t):
-            s, a = anim.ease_out(t), anim.smoothstep(t)
-            a_img = Image.new("RGB", (w, h), bg)
-            a_img.paste(old, (round(-move * s), 0))
-            b_img = Image.new("RGB", (w, h), bg)
-            b_img.paste(new, (round(move * (1 - s)), 0))
-            photo.paste(Image.blend(a_img, b_img, a))
-        animate(self.views, "page", PAGE_MS, frame, self._end_page_change, ease=lambda t: t, kind="fade")
+        def slide(t):
+            cv.coords(item, round(-move * t), 0)
+        if move:
+            animate(top, "page", PAGE_MS, slide, kind="move")
+        fade(top, "show", alpha, 0.0, PAGE_MS, done=self._end_page_change, ease=anim.smoothstep)
 
     def _end_page_change(self):
         cover, self._page_cover = getattr(self, "_page_cover", None), None
         if cover is not None:
-            stop_animation(self.views, "page")
+            stop_animation(cover, "page")
+            stop_animation(cover, "alpha")
             try:
                 cover.destroy()
             except tk.TclError:

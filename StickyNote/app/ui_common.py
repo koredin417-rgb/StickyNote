@@ -1629,6 +1629,8 @@ class PopupMenu:
 
     def _press(self, event):
         t = self.top
+        if t is None:                       # (closed meanwhile)
+            return
         inside = (t.winfo_rootx() <= event.x_root < t.winfo_rootx() + t.winfo_width()
                   and t.winfo_rooty() <= event.y_root < t.winfo_rooty() + t.winfo_height())
         if not inside:
@@ -1642,6 +1644,8 @@ class PopupMenu:
             self.top.after(30, self._check_focus)
 
     def _check_focus(self):
+        if self.top is None:                # (closed meanwhile)
+            return
         try:
             if self.top.winfo_exists() and self.top.focus_get() is None:
                 self.close()

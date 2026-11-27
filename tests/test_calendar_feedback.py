@@ -6,6 +6,11 @@ from pathlib import Path
 import geom
 import ui_calendar
 from _support import close_app, make_app, pump
+from app import App
+
+
+def make_app_two(folder, screens):
+    return App(folder, screens=screens)
 
 
 class CalendarEdgeTest(unittest.TestCase):
@@ -96,6 +101,50 @@ class CalendarEdgeTest(unittest.TestCase):
         self.assertTrue(cal.expanded)
         self.assertLessEqual(cal.target_box[2] - cal.target_box[0], room)
 
+
+    def test_big_survives_replans(self):
+        # (review) the click and every later re-plan (a note resize: settle_view; refit) agree: big
+        # stays big on its side, docked, where the click put it
+        cal = self.beside_right_with_room(300)
+        lw, _lh = cal._least_for("big")
+        self.put(self.nw.pad.x - (lw + 40 - 300), self.nw.pad.y)
+        cal._click_view_now("big")
+        self.settle()
+        self.assertTrue(cal.expanded)
+        box = tuple(cal.target_box)
+        cal.settle_view()
+        self.settle()
+        cal.refit(geom.pad_box(self.nw.pad))
+        self.settle()
+        self.assertEqual(self.nw.pad.calendar_side, "right")
+        self.assert_docked_beside()
+        self.assertTrue(cal.expanded)
+        self.assertEqual(tuple(cal.target_box), box)
+
+    def test_big_room_is_the_notes_screen(self):
+        # (review) two screens side by side: a note near the seam on the left one has no room on its
+        # right for big there; big must not straddle onto the next screen
+        import ui_calendar as uc
+        from geom import Screen
+        close_app(self.app)
+        self.app = make_app_two(Path(self.tmp.name), [Screen(monitor=(0, 0, 1920, 1080), work=(0, 0, 1920, 1040)),
+                                                      Screen(monitor=(1920, 0, 3840, 1080), work=(1920, 0, 3840, 1040))])
+        pump(self.app, lambda: len(self.app.windows) == 1)
+        self.nw = next(iter(self.app.windows.values()))
+        self.nw.close_hints()
+        self.settle()
+        p = self.nw.pad
+        left, top, right, bottom = self.app.area_of((10, 10, 20, 20))
+        self.put(right - 300 - p.width, top + 200)
+        self.nw.toggle_calendar()
+        self.settle()
+        cal = self.nw.calendar
+        self.assertEqual(p.calendar_side, "right")
+        cal._click_view_now("big")
+        self.settle()
+        self.assertLessEqual(cal.target_box[2], right)
+        self.assert_docked_beside()
+        del uc
 
 if __name__ == "__main__":
     unittest.main()
