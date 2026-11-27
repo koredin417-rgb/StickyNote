@@ -122,7 +122,8 @@ SCREEN_SETTLE_POLL_MS = 300      # ... and this often while a change settles
 SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stayed this long
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
-MENU_FADE_MS = anim.FAST         # a menu fades in
+MENU_FADE_MS = anim.FAST         # a menu fades in (and drops MENU_DROP px into place), and fades out in exit_ms of it
+MENU_DROP = 6                    # ... px at 100 %
 OPEN_FADE_MS = 160               # a new or reopened note fades in (and blinks)
 CLOSE_FADE_MS = anim.FAST        # a closed note fades out (ease-in: it lets go, then goes)
 CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
@@ -377,6 +378,37 @@ def fade(win, key, start, end, ms, done=None, ease=anim.ease_out):
     clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
                 write=lambda v: win.attributes("-alpha", v),
                 frm=None if clock.active(win, "alpha") else start, done=done, ease=ease)
+
+
+def menu_in(win, x, y, w, h, drop) -> None:
+    """A menu or drop-down list opens at (x, y), w x h: it drops ``drop`` px into place (negative:
+    it rises, opening upward) while it fades in, over MENU_FADE_MS. Where the Animations setting
+    cuts movement it is just there."""
+    clock = anim.clock_of(win)
+    moves = not clock._instant("move")
+    y0 = y - drop if moves else y
+    win.geometry(f"{w}x{h}+{x}+{y0}")
+    win.attributes("-alpha", 0.0)
+    win.deiconify()
+    fade(win, "show", 0.0, 1.0, MENU_FADE_MS)
+    if moves:
+        clock.glide(win, (x, y, x + w, y + h), MENU_FADE_MS, frm=(x, y0, x + w, y0 + h))
+
+
+def menu_out(win) -> None:
+    """A menu closes: it takes no input from now, fades out (ease-in, exit_ms of MENU_FADE_MS), and
+    goes."""
+    def gone():
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+    try:
+        win.attributes("-disabled", True)
+    except tk.TclError:
+        gone()
+        return
+    fade(win, "show", _alpha(win), 0.0, anim.exit_ms(MENU_FADE_MS), done=gone, ease=anim.ease_in)
 
 
 def _alpha(win) -> float:
@@ -1091,10 +1123,10 @@ class FontPicker(tk.Frame):
         w, h = max(self.winfo_width(), px(160)), top.winfo_reqheight()
         x, y = self.winfo_rootx(), self.winfo_rooty() + self.winfo_height() + px(2)
         area = self.app.area_of((x, self.winfo_rooty(), x + self.winfo_width(), y))     # (its own screen)
-        if y + h > area[3]:
+        up = y + h > area[3]
+        if up:
             y = self.winfo_rooty() - h - px(2)
-        top.geometry(f"{w}x{h}+{x}+{y}")
-        top.deiconify()
+        menu_in(top, x, y, w, h, px(MENU_DROP) * (-1 if up else 1))
         top.attributes("-topmost", True)
         lb.focus_force()
 
@@ -1134,11 +1166,8 @@ class FontPicker(tk.Frame):
 
     def close(self):
         if self.popup is not None:
-            try:
-                self.popup.destroy()
-            except tk.TclError:
-                pass
-            self.popup = None
+            popup, self.popup = self.popup, None
+            menu_out(popup)
 
     def recolor(self, c):
         self.colors = c
@@ -1543,12 +1572,10 @@ class PopupMenu:
         area = self.app.area_of((int(x), int(y), int(x), int(y)))      # the screen it opens on (S1)
         if x + w > area[2]:
             x = max(area[0], x - w)
-        if y + h > area[3]:
+        up = y + h > area[3]                # (no room under the pointer: it opens upward, rising)
+        if up:
             y = max(area[1], y - h)
-        top.geometry(f"+{int(x)}+{int(y)}")
-        top.attributes("-alpha", 0.0)
-        top.deiconify()
-        fade(top, "show", 0.0, 1.0, MENU_FADE_MS)
+        menu_in(top, int(x), int(y), w, h, self.app.px(MENU_DROP) * (-1 if up else 1))
         top.attributes("-topmost", True)
         top.lift()
         top.bind("<ButtonPress>", self._press, add="+")
@@ -1571,12 +1598,13 @@ class PopupMenu:
     def close(self):
         if PopupMenu.current is self:
             PopupMenu.current = None
-        if self.top is not None:
+        top, self.top = self.top, None
+        if top is not None:
             try:
-                self.top.grab_release()
-                self.top.destroy()
+                top.grab_release()
             except tk.TclError:
                 pass
+            menu_out(top)                   # (it fades out; a new menu may open meanwhile)
 
     def _choose(self, item):
         self.close()
