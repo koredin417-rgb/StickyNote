@@ -65,5 +65,77 @@ class SavingTest(unittest.TestCase):
         self.assertIsNotNone(self.app.store._read(self.app.store.path))
 
 
+class SaveSoonTest(unittest.TestCase):
+    """B4: the save after an action that starts an animation (new note, reopen, close, trash) waits
+    for the motion to end (at most SAVE_SOON_MS); quitting still writes everything."""
+    setUp, tearDown, saved = SavingTest.setUp, SavingTest.tearDown, SavingTest.saved
+
+    def record_saves(self):
+        saves, real = [], self.app.store.save
+
+        def save(*a, **k):
+            saves.append((time.perf_counter(), self.app.clock.busy))
+            return real(*a, **k)
+        return saves, patched(self.app.store, "save", save)
+
+    def test_new_note_saves_after_motion(self):
+        saves, patch = self.record_saves()
+        with patch:
+            self.app.new_window(from_window=self.nw)
+            self.assertEqual(saves, [])                     # not inside the call that starts the motion
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertFalse(saves[0][1])                       # ... but once it is still
+
+    def test_save_soon_bounded_by_one_second(self):
+        self.app.clock.animate(self.app.root, "hold", 3000, lambda k: None)
+        self.nw.note.color = "#CFE6FF"
+        saves, patch = self.record_saves()
+        with patch:
+            t0 = time.perf_counter()
+            self.app.save_soon()
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertGreaterEqual(saves[0][0] - t0, 0.9)
+        self.assertLess(saves[0][0] - t0, 1.6)
+
+    def two_notes(self):
+        saves, patch = self.record_saves()
+        b = self.app.new_window(from_window=self.nw)
+        pump(self.app, lambda: not self.app.clock.busy and not self.app.motion.busy(), timeout=2.0)
+        pump(self.app, timeout=1.2)                         # (its own save is done)
+        return b
+
+    def test_close_saves_after_fade(self):                  # (review: the save ran before the fade's first frame)
+        b = self.two_notes()
+        b.body.insert("1.0", "closing")
+        b.sync_from_widgets()
+        saves, patch = self.record_saves()
+        with patch:
+            self.app.close_window(b)
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertFalse(saves[0][1])
+
+    def test_trash_saves_after_flight(self):
+        nw = self.nw
+        nw.body.insert("1.0", "to the bin")
+        nw.sync_from_widgets()
+        pump(self.app, timeout=0.6)
+        self.app.save_now()
+        saves, patch = self.record_saves()
+        with patch:
+            nw.trash_note(nw.note)
+            self.assertTrue(pump(self.app, lambda: saves, timeout=2.0))
+        self.assertFalse(saves[0][1])
+
+    def test_quit_right_after_new_note_keeps_it(self):
+        nw = self.app.new_window(from_window=self.nw)
+        nw.body.insert("1.0", "keep me")
+        nw.sync_from_widgets()
+        pid = nw.pad.id
+        self.app.quit()
+        data = self.saved()
+        self.assertIn("keep me", json.dumps(data["notes"], ensure_ascii=False))
+        self.assertIn(pid, [p["id"] for p in data["pads"]])
+
+
 if __name__ == "__main__":
     unittest.main()

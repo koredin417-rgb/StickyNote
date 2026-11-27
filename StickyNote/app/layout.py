@@ -490,7 +490,7 @@ class LayoutMixin:
         settle_drop of those notes (``places``: window -> (x, y))."""
         return self.settle_drop({w.pad.id for w in places}, places=places, anchor=nw)
 
-    def settle_drop(self, ids: set, places: dict | None = None, anchor=None) -> dict:
+    def settle_drop(self, ids: set, places: dict | None = None, anchor=None, velocity=None) -> dict:
         """After a drag or a resize (M1, M3): the dropped ``ids`` (note ids, and CAL for the
         undocked calendar) end up on the screen and clear of everything else, in one plan.
         1. Only when a member (a note with its docked calendar, or the calendar) doesn't fit one
@@ -596,12 +596,14 @@ class LayoutMixin:
             p.width, p.height = sizes[w]
             p.target = None
         self.space_changed()
-        self.apply(goal, starts={w.pad.id: xy for w, xy in places.items() if w not in driven})
+        self.apply(goal, starts={w.pad.id: xy for w, xy in places.items() if w not in driven},
+                   velocity=None if not velocity else {k: velocity for k in goal})   # (a throw: B8)
         return goal
 
     # ---- applying a plan: every move goes through motion (S4) ---------------------------------
-    def apply(self, targets: dict[str, Box], *, undo_label: str | None = None, ms: int = GLIDE_MS,
-              done=None, anchor=None, starts: dict | None = None, before: dict | None = None) -> None:
+    def apply(self, targets: dict[str, Box], *, undo_label: str | None = None, ms: int | None = None,
+              done=None, anchor=None, starts: dict | None = None, before: dict | None = None,
+              velocity: dict | None = None) -> None:
         """Glide every window in ``targets`` to its box, once, on the one clock (Motion.run).
         Window level: a pad id means that note's own box, CAL the calendar's. ``undo_label``
         (a texts key): Undo is offered once the action ends (offer_undo), on ``anchor`` (a
@@ -636,7 +638,7 @@ class LayoutMixin:
                     self.offer_undo(before, label, nw)
             if done is not None:
                 done()
-        self.motion.run(targets, ms=ms, done=finished, starts=starts)
+        self.motion.run(targets, ms=ms, done=finished, starts=starts, velocity=velocity)
 
     def apply_plan(self, boxes: dict[str, Box], *, parts: dict | None = None, **kw) -> None:
         """apply() for a planner's output, keyed by shape id (space()). An id in ``parts`` is
@@ -728,18 +730,19 @@ class LayoutMixin:
             self.set_folded(wins, on)
         self.request_save()
 
-    def set_folded(self, wins: list, on: bool) -> None:
+    def set_folded(self, wins: list, on: bool, rolling: bool = False) -> None:
         """Fold (``on``) or unfold ``wins`` as one plan: folding closes up with every link (P4:
         whatever is in line and linked, whatever Alt or the drag switch say), unfolding pushes
         like any growth in app mode (nothing is dragged: F36). Both plan against the space list
-        from before, as the notes already show their new state. No Undo."""
+        from before, as the notes already show their new state. No Undo. ``rolling``: the notes roll
+        there themselves (their windows keep their height; they call _apply_collapsed after)."""
         if not wins:
             return
         old = self.space()
         by_id = {s.id: s for s in old}
         for w in wins:
             w.pad.collapsed = on
-            w._apply_collapsed(shoot=True)
+            w._apply_collapsed(shoot=True, geometry=not rolling)
         changes, parts = {}, {}
         for w in wins:
             note, s = _pad_box(w.pad), by_id.get(w.pad.id)

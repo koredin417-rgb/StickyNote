@@ -44,6 +44,47 @@ if IS_WINDOWS:
     kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
 
 
+_GDI = None
+_BORDER_OFF: set = set()                    # hwnds whose DWM border is off while a region is set
+DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_COLOR_NONE = 34, 0xFFFFFFFF, 0xFFFFFFFE
+
+
+def _dwm_border(hwnd, on: bool) -> None:
+    try:
+        value = ctypes.c_uint(DWMWA_COLOR_DEFAULT if on else DWMWA_COLOR_NONE)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_BORDER_COLOR, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception:
+        pass
+
+
+def _region_border(hwnd, region: bool) -> None:
+    """DWM draws a window's 1 px border along its real size even outside its region (a faint line
+    where the window really ends): off while a region is set, back when it goes. Only on a change."""
+    if region == (hwnd in _BORDER_OFF):
+        return
+    if region:
+        _BORDER_OFF.add(hwnd)
+    else:
+        _BORDER_OFF.discard(hwnd)
+    _dwm_border(hwnd, not region)
+
+
+def _gdi():
+    """gdi32 with the region calls declared, once (not at every frame of a roll or resize)."""
+    global _GDI
+    if _GDI is None:
+        g = ctypes.WinDLL("gdi32")
+        g.CreateRectRgn.restype = ctypes.c_void_p
+        g.CreateRectRgn.argtypes = (ctypes.c_int,) * 4
+        g.CreateRoundRectRgn.restype = ctypes.c_void_p
+        g.CreateRoundRectRgn.argtypes = (ctypes.c_int,) * 6
+        g.DeleteObject.argtypes = (ctypes.c_void_p,)
+        user32.SetWindowRgn.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)
+        _GDI = g
+    return _GDI
+
+
 def clip_height(win, width=None, height=None) -> bool:
     """Show only the top ``height`` px of ``win`` (a window region), or all of it again
     (``width`` None). A roll moves this edge instead of resizing the window: nothing is
@@ -51,15 +92,37 @@ def clip_height(win, width=None, height=None) -> bool:
     hwnd = hwnd_of(win) if IS_WINDOWS else 0
     if not hwnd:
         return False
-    gdi32 = ctypes.WinDLL("gdi32")
-    gdi32.CreateRectRgn.restype = ctypes.c_void_p
-    user32.SetWindowRgn.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)
+    gdi32 = _gdi()
     if width is None:
-        return bool(user32.SetWindowRgn(ctypes.c_void_p(hwnd), None, True))
+        ok = bool(user32.SetWindowRgn(ctypes.c_void_p(hwnd), None, True))
+        _region_border(hwnd, False)
+        return ok
+    _region_border(hwnd, True)
     rgn = gdi32.CreateRectRgn(0, 0, int(width), max(1, int(height)))
     if not rgn:
         return False
     if not user32.SetWindowRgn(ctypes.c_void_p(hwnd), ctypes.c_void_p(rgn), True):
+        gdi32.DeleteObject(ctypes.c_void_p(rgn))
+        return False
+    return True                             # (the window owns the region now)
+
+
+def clip_box(win, width, height, radius=0, redraw=False) -> bool:
+    """Show only the top-left ``width`` x ``height`` px of ``win``, its corners rounded by
+    ``radius`` (a window region: DWM's own rounding is off while one is set). A group resize
+    moves this edge instead of resizing the window (B3). ``redraw`` False: nothing is repainted
+    (what the window already shows is right: the region only hides part of it). clip_height(win)
+    clears it."""
+    hwnd = hwnd_of(win) if IS_WINDOWS else 0
+    if not hwnd:
+        return False
+    gdi32 = _gdi()
+    _region_border(hwnd, True)
+    d = 2 * int(radius)
+    rgn = gdi32.CreateRoundRectRgn(0, 0, int(width) + 1, max(1, int(height)) + 1, d, d)
+    if not rgn:
+        return False
+    if not user32.SetWindowRgn(ctypes.c_void_p(hwnd), ctypes.c_void_p(rgn), bool(redraw)):
         gdi32.DeleteObject(ctypes.c_void_p(rgn))
         return False
     return True                             # (the window owns the region now)

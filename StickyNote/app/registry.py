@@ -122,7 +122,7 @@ class RegistryMixin:
         if shown_in is not None:
             shown_in._load_note(self._latest_unshown() or self.blank_note(note))
         self.refresh_lists()
-        self.save_now()
+        self.save_soon()                            # (after the card's flight to the bin)
         return True
 
     def restore_note(self, note_id) -> Note | None:
@@ -131,7 +131,7 @@ class RegistryMixin:
             return None
         note.deleted = None
         self.refresh_lists()
-        self.save_now()
+        self.save_soon()
         return note
 
     def delete_forever(self, note_id):
@@ -219,7 +219,7 @@ class RegistryMixin:
             nw.glide_to(*target, ms=NEW_SLIDE_MS, start_at=src)
             nw.win.after(NEW_SLIDE_MS + 20, lambda: nw.win.winfo_exists() and nw.win.lift())
         nw.flash()                      # the top bar in the theme color, fading back
-        self.save_now()
+        self.save_soon()                # once it has come out (no fsync in its first frames)
         return nw
 
     def newest_id(self) -> str | None:
@@ -245,7 +245,7 @@ class RegistryMixin:
             nw.show()
             self.return_note(nw, "reopen")
             nw.flash()
-            self.save_now()
+            self.save_soon()
             return nw
         if from_window is not None:
             from_window.show_notice(tr("nothing_closed"))
@@ -312,7 +312,7 @@ class RegistryMixin:
         self.arrange_soon()                         # auto layout: the others close up
         if nw.note.is_empty:
             self.discard_note(nw.note)
-        self.save_now()
+        self.save_soon()                            # once it has faded out
 
         def gone():                                 # the keyboard to a note still shown first: Windows
             self.note_minimized(nw)                 # would hand it to the proxy (read as a taskbar click)

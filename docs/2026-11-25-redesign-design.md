@@ -877,3 +877,64 @@ Done 2026-11-26 (`e96a7ea`). Plan: `docs/superpowers/plans/2026-11-26-phase7-mod
 - each module's unused imports;
 - a `settings_changed(key)` broadcast;
 - single-use constants moved next to their only user (e.g. `PICTURE_BUDGET` into `registry`).
+
+## Phase 8 results (motion polish)
+
+Done 2026-11-27 on branch `phase8`. Plan: `docs/superpowers/plans/2026-11-27-phase8-motion-polish.md`. Proposals B1–B9 and C4's close easing, from `docs/2026-11-27-improvement-proposals.md` §3.
+
+All numbers come from one session on a 72 Hz display (13.9 ms per frame), with `main` (`a4d4a9f`) measured back to back from a separate worktree.
+
+| Check | `main` | Phase 8 | Verdict |
+|---|---|---|---|
+| New note: its fade's first frame | 13–33 % of the fade (48 % this morning, from a cold start), depending on the work before the frame | Always one frame in: 24 %, which is the ease-out curve's own first step at 160 ms | Fixed (B1) |
+| Fold, unfold, calendar open: the first frame | 10–26 %, varying | 21 %, one frame in | Even (B1) |
+| Group resize, 16 linked notes (`interact_bench`) | p50 19.6 ms; 60 of 60 frames over budget; 2 over 2× | p50 14.2–14.6 ms; 33 of 60 over; none over 2× | Better. Target missed: p50 under 13.9 ms (B3) |
+| Group drag, solo resize | p50 6.1; solo median 17.7 (3 runs) | p50 4.4–6.1; solo median 17.4 | Same |
+| Fold, with the notes under it closing up | 420 ms (a roll, then the close-up) | About 250 ms, both at once | B5 |
+| Minimize / restore | 360 ms in two phases | 280 ms in one curve | B5 |
+| A group drop pushing what it overlaps | After a 280 ms timer | At the next frame after it lands | B5 |
+| Saves after new / reopen / close / trash / restore | Inside the call, before the first frame (about 4–5 ms) | When the motion ends, at most 1 s later; quitting saves everything | B4 |
+| Idle | 2 wakeups in 10 s | 2 (clean runs) | Same |
+| `baseline` scenarios | `docs/perf/phase8-before.json` | `docs/perf/phase8.json` | Same within noise, except one known cost below |
+| Tests | 206 | 249 (43 new) | All pass |
+
+**What changed:**
+- **The frame clock (`anim.py`):**
+  - An animation's clock starts at its first frame, one period back (B1).
+  - Waking from idle takes the 1 ms timer at once.
+  - Half rate needs a sustained load (B2): the median of the last 6 ticks' own work, entering above 0.8× a period and leaving below 0.55×, forgotten at idle.
+  - New hooks: `quiet()`, `glide_ms()`, `smoothstep()`, and `velocity=` on tweens and glides.
+- **Durations and curves (B7):**
+  - A plan's glide takes `clamp(140 + 6·√d, 180, 320)` ms, where d is in px at 100 %.
+  - A note fades in over 160 ms and out over 120 ms with ease-in.
+  - The calendar's close fades with ease-in.
+  - The flash uses smoothstep.
+  - The scroll thumb fades out with ease-in.
+- **The Animations setting (B9):** animations are of two kinds, move or fade. Off ends everything at once, with `done` at the next frame. Reduced ends moves and keeps fades. Minimize and restore fade in Reduced and go at once in Off. Folding is instant outside Full.
+- **Group resize (B3):**
+  - A frozen note keeps its window size and shows the dragged size through a rounded window region, without a forced repaint. The window grows only in 96 px steps.
+  - DWM's own border is off while a region is set.
+- **Overlaps (B5):**
+  - The fold's close-up runs while the note rolls.
+  - Minimize and restore are each one curve.
+  - The drop's push runs through `Motion.when_still`.
+- **Drag companions (B6):** the group ring and a docked calendar move in the note's DeferWindowPos batch.
+- **Snapping (B8):**
+  - The magnet's pull eases on a 28 ms lag, finishing on its own frames.
+  - A release mid-ease lands exactly on the snap.
+  - A drop that glides starts at the pointer's release speed.
+
+**The fresh review** found no critical issues and five important ones. All were fixed with a test that failed first:
+- Close and trash still saved before their first frame.
+- A hand held still before the release counted as a throw.
+- A docked calendar started a thrown drop from rest.
+- A held snap crept with the pointer. The lag now runs only on a snap's change.
+- A window's region was cleared before Tk had shrunk the window, at a group resize's release and at a roll's end.
+
+The review also surfaced a sixth fix: a calendar docked below a folding note jumped over it as the roll began. Nine minor findings are left for later; they are listed in the ledger.
+
+**Known costs and open items:**
+- **The group resize misses its 72 fps target.** What's left is Tk repainting each frozen cover's moving pieces, plus the dragged note's own resize. Clipping the dragged note too measured no gain.
+- **Releasing a group resize** costs one or two frames of about 23 ms in the glides that follow, in 2 of 3 runs. The frozen notes' real resize now happens at release, not spread over the gesture.
+- **The new note's first frame shows 24 %:** the 160 ms ease-out curve's first step. A gentler entrance curve would lower it.
+- **Not done:** B10 (fade to 0.999), the rest of B11 (pre-warming), B12 (per-window perf keys, DWM present stats).

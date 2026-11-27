@@ -16,12 +16,14 @@ window that takes no space).
 """
 from __future__ import annotations
 
+import math
 import time
 import tkinter as tk
 
+import anim
 import winapi
 from geom import CAL, pad_box, shown_h
-from ui_common import GLIDE_MS, TIP_KEY, _alpha, accent_color, animating, stop_animation
+from ui_common import TIP_KEY, _alpha, accent_color, animating, stop_animation
 
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
@@ -54,11 +56,12 @@ class _Item:
     ``now`` is the box it was last put at. ``sized``: a note's size changes on the way (it is
     frozen); for CAL, its size was changed at the start (only its place glides). ``pad``: a
     note's Pad (it outlives its window: set_language, closing)."""
-    __slots__ = ("id", "start", "end", "now", "t0", "ms", "sized", "pad")
+    __slots__ = ("id", "start", "end", "now", "t0", "ms", "sized", "pad", "vel")
 
     def __init__(self, item_id, start, end, t0, ms, sized, pad=None):
         self.id, self.start, self.end, self.now = item_id, start, end, start
         self.t0, self.ms, self.sized, self.pad = t0, ms, sized, pad
+        self.vel = None                         # (vx, vy) px/s it starts at: a thrown note (B8)
 
 
 class Motion:
@@ -147,9 +150,9 @@ class Motion:
         return x, y, x + w, y + h
 
     # ---- running a plan --------------------------------------------------------------------
-    def run(self, targets, ms=GLIDE_MS, done=None, starts=None) -> None:
+    def run(self, targets, ms=None, done=None, starts=None, velocity=None) -> None:
         """Glide every id in ``targets`` (pad ids or CAL -> boxes) to its box, on the one
-        clock. ``starts``: an id's start top-left when its window is not where it is now (a
+        clock: each for anim.glide_ms of how far it goes (B7), or all for ``ms``. ``starts``: an id's start top-left when its window is not where it is now (a
         new note sliding out from behind its parent). A note's docked calendar not in
         ``targets`` goes along beside it. An id still gliding from an earlier plan is taken
         over from where it is (a later plan wins); that plan's other ids glide on. The end
@@ -221,7 +224,17 @@ class Motion:
                     self._settle(app.windows[pid].pad, end)
                 continue
             pad = None if pid == CAL else app.windows[pid].pad
-            item = self._items[pid] = _Item(pid, start, end, t0, ms, sized, pad)
+            if ms is None:                      # by the furthest corner's travel, in px at 100 %
+                d = max(math.hypot(end[0] - start[0], end[1] - start[1]),
+                        math.hypot(end[2] - start[2], end[3] - start[3]))
+                item_ms = anim.glide_ms(d * 100 / app.px(100))
+            else:
+                item_ms = ms
+            item = self._items[pid] = _Item(pid, start, end, t0, item_ms, sized, pad)
+            if velocity and old is None:        # (one already gliding keeps its own speed)
+                item.vel = velocity.get(pid)
+                if item.vel is None and pid == CAL and cal is not None and cal.docked:
+                    item.vel = velocity.get(cal.nw.pad.id)      # (a docked calendar goes as its note goes)
             new.append(item)
         for item in sorted(new, key=lambda i: i.id == CAL):     # (notes first: CAL's offset is from its note)
             self._begin(item, item.id in superseded, item.id in starts)
@@ -266,7 +279,7 @@ class Motion:
             if cal is not None:
                 cal._xy = (b[0], b[1])
         self.app.clock.glide(win, item.end, item.ms, frm=item.start, sized=item.sized and item.id != CAL,
-                             write_extra=extra, done=lambda item=item: self._got_there(item))
+                             write_extra=extra, done=lambda item=item: self._got_there(item), velocity=item.vel)
 
     def _crossfade(self, item, win, cal):
         """Animations: Reduced: the window fades out, jumps to its box, fades back. It runs on the
@@ -289,7 +302,7 @@ class Motion:
         def done():
             self._fading.pop(item.id, None)
             self._got_there(item)
-        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t)
+        clock.animate(win, "box", 2 * CROSSFADE_MS, step, done, ease=lambda t: t, kind="fade")
 
     def _alpha_back(self, pid, item):
         if pid == CAL:
@@ -311,6 +324,14 @@ class Motion:
                 win.attributes("-alpha", self._alpha_back(pid, item))
             except tk.TclError:
                 pass
+
+    def when_still(self, fn) -> None:
+        """Run ``fn`` once nothing this moves any more: with the running plans' end step, or at
+        the next frame when none runs (B5: a step that follows a glide starts as it lands)."""
+        if self._items:
+            self._dones.append(fn)
+        else:
+            self.app.clock.request(fn)
 
     def _got_there(self, item):
         """A glide's last frame: it lands at the start of the next frame, with the others that

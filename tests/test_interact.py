@@ -231,6 +231,7 @@ class QuietGestureTest(InteractTest):
                 ring.move([(a + 7 * k, b + 3 * k, c + 7 * k, d + 3 * k) for a, b, c, d in boxes])
                 pump(self.app, timeout=0.01)
         self.assertEqual(spy.call_count, 0)
+        pump(self.app, lambda: not self.app.clock._moves, timeout=0.2)    # (it moves at the frame: B6)
         self.assertEqual(ring.top.winfo_rootx() - ring._frame[0], 0)
         ring.hide()
 
@@ -318,6 +319,420 @@ class PerFrameTest(InteractTest):
         cal._hide_count()
         cal.grid.delete("ghost")
         cal._chip_drag = None
+
+
+
+class GroupResizeClipTest(unittest.TestCase):
+    """Phase 8, B3: in a group resize the frozen notes' windows keep their size (each real resize
+    costs Tk a layout and a repaint); a window region shows the size the drag gives them, and
+    the window grows only in RING_SLACK steps. Let go, each is exactly its pad's box again."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+    group_of_three = InteractTest.group_of_three
+
+    def start(self):
+        a, b, c = self.group_of_three()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        a._resize_start(ev(x, y))
+        frozen = [o for o in (b, c) if o._cover is not None]
+        self.assertTrue(frozen, "no note in line: the test does not test")
+        return a, (b, c), frozen, x, y
+
+    def test_group_resize_shrink_keeps_window_size(self):
+        a, others, frozen, x, y = self.start()
+        sizes = {o: (o.win.winfo_width(), o.win.winfo_height()) for o in frozen}
+        shown0 = {o: (o.pad.width, o.pad.height) for o in frozen}
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        pump(self.app, timeout=0.05)
+        for o in frozen:
+            self.assertEqual((o.win.winfo_width(), o.win.winfo_height()), sizes[o])
+            self.assertIsNotNone(o._clip)
+            self.assertNotEqual(tuple(o._clip[2:]), shown0[o])     # (it shows a smaller size)
+        a._drag_end(ev(x - 20, y - 20))
+        self.settle()
+
+    def test_group_resize_grow_steps_by_slack(self):
+        a, others, frozen, x, y = self.start()
+        seen = {o: [(o.win.winfo_width(), o.win.winfo_height())] for o in frozen}
+        for k in range(1, 16):
+            a._resize_move(ev(x + 10 * k, y + 10 * k))
+            self.frame()
+            pump(self.app, timeout=0.01)
+            for o in frozen:
+                size = (o.win.winfo_width(), o.win.winfo_height())
+                if size != seen[o][-1]:
+                    seen[o].append(size)
+        for o in frozen:
+            self.assertLessEqual(len(seen[o]) - 1, 2, seen[o])
+        a._drag_end(ev(x + 150, y + 150))
+        self.settle()
+
+    def test_dwm_border_hidden_while_clipped(self):
+        # DWM draws a window's 1 px border at its real size even outside its region: hidden
+        # while a region shows less than the window, back when the region goes
+        calls = []
+        with patched(winapi, "_dwm_border", lambda hwnd, on: calls.append(on)):
+            a, others, frozen, x, y = self.start()
+            for k in range(1, 4):
+                a._resize_move(ev(x - 4 * k, y - 4 * k))
+                self.frame()
+            self.assertIn(False, calls)
+            self.assertNotIn(True, calls)
+            a._drag_end(ev(x - 12, y - 12))
+            self.settle()
+        self.assertEqual(calls.count(True), len(frozen))
+        self.assertEqual(calls[-1], True)
+
+    def test_thaw_shrinks_before_region_clears(self):     # (review: geometry() waits for idle; the region went at once)
+        import ctypes
+        from ctypes import wintypes
+        a, others, frozen, x, y = self.start()
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        for o in frozen:
+            clip = o._clip
+            o.thaw()
+            r = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(wintypes.HWND(winapi.hwnd_of(o.win)), ctypes.byref(r))
+            self.assertEqual((r.left, r.top, r.right - r.left, r.bottom - r.top), tuple(clip), o.pad.id)
+        a._drag_end(ev(x - 20, y - 20))
+        self.settle()
+
+    def test_group_resize_release_exact(self):
+        a, b, c = self.group_of_three()
+        c.toggle_collapse(instant=True)             # a folded member keeps its folded height
+        self.settle()
+        g = a.grip
+        x, y = g.winfo_rootx() + 2, g.winfo_rooty() + 2
+        a._resize_start(ev(x, y))
+        for k in range(1, 6):
+            a._resize_move(ev(x - 4 * k, y - 4 * k))
+            self.frame()
+        a._drag_end(ev(x - 20, y - 20))
+        self.app.root.update_idletasks()
+        from geom import shown_h
+        for o in (a, b, c):                         # the size at once (no frame at the window's big size)
+            self.assertEqual((o.win.winfo_width(), o.win.winfo_height()), (o.pad.width, shown_h(o.pad)), o.pad.id)
+        self.settle()
+        for o in (a, b, c):
+            p = o.pad
+            self.assertEqual((o.win.winfo_rootx(), o.win.winfo_rooty(), o.win.winfo_width(), o.win.winfo_height()),
+                             (p.x, p.y, p.width, shown_h(p)), p.id)
+            self.assertIsNone(getattr(o, "_clip", None))
+            self.assertIsNone(o._cover)
+        self.assertTrue(c.pad.collapsed)
+
+
+
+class OverlapTest(unittest.TestCase):
+    """Phase 8, B5: chained phases overlap into one motion: a fold's neighbours close up while it
+    rolls; minimize / restore are one curve; a group drop pushes as soon as it lands."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+
+    def fine_pump(self, until, timeout):
+        import time
+        end = time.perf_counter() + timeout
+        while time.perf_counter() < end and not until():
+            self.app.root.update()
+            time.sleep(0.002)
+        return time.perf_counter()
+
+    def record_rolls(self, nw):
+        rec, real = [], nw._roll_geometry
+
+        def roll(h, dy=0):
+            rec.append((h, dy, float(nw.win.attributes("-alpha"))))
+            return real(h, dy)
+        nw._roll_geometry = roll
+        return rec
+
+    def test_fold_moves_neighbours_during_roll(self):
+        import time
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertGreaterEqual(b.pad.y, a.pad.y + a.pad.height - 2, "b is not under a: the test does not test")
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        t0 = time.perf_counter()
+        a.toggle_collapse()
+        self.assertTrue(a.rolling)
+        self.assertTrue(self.app.motion.drives(b.pad.id))      # b starts closing up at once
+        t1 = self.fine_pump(lambda: not a.rolling and not self.app.motion.busy(), 1.0)
+        self.assertLess(t1 - t0, 0.35)
+        self.settle()
+        self.assertTrue(a.pad.collapsed)
+        self.assertEqual(a.win.winfo_height(), a.collapsed_height())
+        self.assertEqual(b.pad.y, a.pad.y + a.collapsed_height() + self.app._gap())
+
+    def test_roll_cover_drop_shrinks_before_region_clears(self):   # (the same order as thaw: review #5)
+        import ctypes
+        from ctypes import wintypes
+        a = self.nw
+        bar = a.collapsed_height()
+        a._roll_cover(a._shot())
+        a._roll_geometry(bar)
+        self.app.root.update_idletasks()
+        a._drop_roll_cover(bar)
+        r = wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(wintypes.HWND(winapi.hwnd_of(a.win)), ctypes.byref(r))
+        self.assertEqual(r.bottom - r.top, bar)
+        a._drop_roll_cover(a.pad.height)
+        a.win.geometry(f"{a.pad.width}x{a.pad.height}")
+        self.settle()
+
+    def test_fold_keeps_calendar_below_until_rolled(self):    # (review: it jumped up over the rolling note)
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        cal = a.calendar
+        a.pad.calendar_side = "below"
+        cal.place()
+        self.settle()
+        y0 = cal.top.winfo_rooty()
+        self.assertGreaterEqual(y0, a.pad.y + a.pad.height)
+        a.toggle_collapse()
+        self.app.root.update_idletasks()
+        self.assertEqual(cal.top.winfo_rooty(), y0)         # no jump at the start of the roll
+        self.fine_pump(lambda: not a.rolling and not self.app.motion.busy(), 1.0)
+        self.settle()
+        self.assertLess(cal.top.winfo_rooty(), y0)          # under the folded bar once it has rolled
+
+    def test_minimize_one_curve(self):
+        import time
+        nw, p = self.nw, self.nw.pad
+        rec = self.record_rolls(nw)
+        bar = min(p.height, nw.collapsed_height())
+        t0 = time.perf_counter()
+        nw.minimize()
+        t1 = self.fine_pump(lambda: nw.minimized, 1.0)
+        self.assertTrue(nw.minimized)
+        self.assertTrue(any(h > bar + 1 and alpha < p.alpha - 0.01 for h, dy, alpha in rec), rec)
+        self.assertGreater(t1 - t0, 0.2)
+        self.assertLess(t1 - t0, 0.34)
+
+    def test_restore_one_curve(self):
+        nw, p = self.nw, self.nw.pad
+        nw.minimize()
+        self.fine_pump(lambda: nw.minimized, 1.0)
+        rec = self.record_rolls(nw)
+        bar = min(p.height, nw.collapsed_height())
+        nw.restore()
+        self.fine_pump(lambda: not nw.rolling, 1.0)
+        self.settle()
+        self.assertTrue(any(h > bar + 1 and alpha < p.alpha - 0.01 for h, dy, alpha in rec), rec)
+        self.assertAlmostEqual(float(nw.win.attributes("-alpha")), p.alpha, places=2)
+        self.assertEqual(nw.win.winfo_height(), p.height)
+
+    def test_group_drop_pushes_without_timer(self):
+        import time
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        pushed = []
+        real = self.app.push_clear
+        with patched(self.app, "push_clear", lambda ids: (pushed.append(time.perf_counter()), real(ids))):
+            x, y = a.pad.x + 60, a.pad.y + 10
+            a._drag_start(ev(x, y))
+            for k in range(1, 5):                   # (up-left: it stays on the screen, nothing glides back)
+                a._drag_move(ev(x - 10 * k, y - 10 * k))
+                self.frame()
+            a._drag_end(ev(x - 40, y - 40))
+            t0 = time.perf_counter()
+            self.fine_pump(lambda: pushed, 1.0)
+        self.assertTrue(pushed)
+        self.assertLess(pushed[0] - t0, 0.06)
+        self.settle()
+
+
+
+class BatchTest(unittest.TestCase):
+    """Phase 8, B6: what moves with a dragged note (the group's ring, a docked calendar) moves in
+    the frame's one window batch with it, not a frame later through <Configure> and geometry()."""
+    setUp, tearDown, settle, frame = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle, InteractTest.frame
+
+    def batches(self):
+        calls = []
+        real = winapi.defer_move
+
+        def defer(moves):
+            calls.append({m[0] for m in moves})
+            return real(moves)
+        return calls, patched(winapi, "defer_move", defer)
+
+    def test_ring_moves_in_batch(self):
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        self.assertIn(b.pad.id, self.app.group_of(a.pad.id))
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y))
+        calls, patch = self.batches()
+        with patch:
+            for k in range(1, 6):
+                a._drag_move(ev(x - 9 * k, y - 7 * k))
+                self.frame()
+        ring = winapi.hwnd_of(self.app.ring.top)        # (read once it shows: its frame window is made then)
+        notes = {winapi.hwnd_of(a.win), winapi.hwnd_of(b.win)}
+        self.assertEqual(len(calls), 5)
+        for moved in calls:
+            self.assertTrue(notes | {ring} <= moved, moved)
+        a._drag_end(ev(x - 45, y - 35))
+        self.settle()
+
+    def test_docked_calendar_moves_in_batch(self):
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        cal = a.calendar
+        self.assertTrue(cal.docked)
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y, ALT))
+        hw = {winapi.hwnd_of(a.win), winapi.hwnd_of(cal.top)}
+        calls, patch = self.batches()
+        with patch, patched(cal, "move_to", Spy(wraps=cal.move_to)) as spy:
+            for k in range(1, 6):
+                a._drag_move(ev(x - 12 * k, y + 6 * k, ALT))
+                self.frame()
+                pump(self.app, timeout=0.02)
+            self.assertEqual(spy.call_count, 0)
+        self.assertEqual(len(calls), 5)
+        for moved in calls:
+            self.assertTrue(hw <= moved, moved)
+        off = (cal.target_box[0] - a.pad.x, cal.target_box[1] - a.pad.y)
+        a._drag_end(ev(x - 60, y + 30, ALT))
+        self.settle()
+        self.assertEqual((cal.target_box[0] - a.pad.x, cal.target_box[1] - a.pad.y), off)
+        self.assertEqual((cal.top.winfo_rootx(), cal.top.winfo_rooty()), tuple(cal.target_box[:2]))
+
+
+
+class SnapEaseTest(unittest.TestCase):
+    """Phase 8, B8: the magnet's pull eases in (90 % in 65 ms) instead of jumping up to 24 px in one
+    frame; it finishes on its own frames when the pointer stops; a drop lands exactly on the snap."""
+    setUp, tearDown, settle = InteractTest.setUp, InteractTest.tearDown, InteractTest.settle
+
+    def two_apart(self):
+        a = self.nw
+        b = self.app.new_window(a)
+        self.settle()
+        p = a.pad
+        bx = p.x + p.width + 200
+        self.app.apply({b.pad.id: (bx, p.y, bx + b.pad.width, p.y + b.pad.height)})
+        self.settle()
+        self.assertNotIn(b.pad.id, self.app.group_of(a.pad.id))
+        return a, b, bx - self.app._gap() - p.width            # where the magnet puts a, beside b
+
+    def drive(self, a):
+        """Record each frame's queued x for a's window."""
+        xs, clock = [], self.app.clock
+        real = clock.move
+
+        def move(win, x, y, w=None, h=None):
+            if win is a.win:
+                xs.append(x)
+            return real(win, x, y, w, h)
+        return xs, patched(clock, "move", move)
+
+    def next_frame(self, xs):
+        n = len(xs)
+        pump(self.app, lambda: len(xs) > n, timeout=0.2)
+
+    def engage(self, a, xs, sx):
+        """Drag a toward b, 4 px a frame, to the first frame the magnet reaches across x."""
+        from ui_common import SNAP_REACH
+        x0, y, p0 = a.pad.x + 60, a.pad.y + 10, a.pad.x
+        reach = self.app.px(SNAP_REACH)
+        a._drag_start(ev(x0, y))
+        for k in range(1, 80):
+            a._drag_move(ev(x0 + 4 * k, y))
+            self.next_frame(xs)
+            if sx - (p0 + 4 * k) <= reach:
+                return x0 + 4 * k, y, p0 + 4 * k             # pointer, and where it alone puts a
+        self.fail("never snapped")
+
+    def test_release_velocity(self):
+        a = self.nw
+        self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.05, 50, 0)]), (1000.0, 0.0))
+        self.assertEqual(a._release_velocity([(0.00, 0, 0), (0.02, 20, 0)]), (0.0, 0.0))
+
+    def test_release_velocity_after_pause(self):    # (review: a still hand before the release is no throw)
+        a = self.nw
+        x, y = a.pad.x + 60, a.pad.y + 10
+        a._drag_start(ev(x, y, ALT))
+        for k in range(1, 6):
+            a._drag_move(ev(x + 30 * k, y, ALT))
+            pump(self.app, timeout=0.016)
+        pump(self.app, timeout=0.2)                         # held still
+        self.assertEqual(a._release_velocity(), (0.0, 0.0))
+        a._drag_end(ev(x + 150, y, ALT))
+        self.settle()
+
+    def test_held_snap_holds_still(self):           # (review: the pointer's own motion fed the lag)
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            pump(self.app, lambda: xs[-1] == sx, timeout=0.3)
+            self.assertEqual(xs[-1], sx)
+            for k in range(1, 6):                       # the hand moves on, within the hold
+                a._drag_move(ev(px_ + 2 * k, py_))
+                self.next_frame(xs)
+                self.assertEqual(xs[-1], sx, xs[-6:])
+            a._drag_end(ev(px_ + 10, py_))
+        self.settle()
+
+    def test_thrown_drop_carries_docked_calendar(self):     # (review: the calendar started from rest)
+        from geom import CAL
+        a = self.nw
+        a.toggle_calendar()
+        self.settle()
+        self.assertTrue(a.calendar.docked)
+        self.app.settle_drop({a.pad.id}, places={a: (a.pad.x, 1040 - 150)}, anchor=a, velocity=(0.0, 1500.0))
+        items = self.app.motion._items
+        self.assertIn(CAL, items)
+        self.assertEqual(items[a.pad.id].vel, (0.0, 1500.0))
+        self.assertEqual(items[CAL].vel, (0.0, 1500.0))
+        self.settle()
+
+    def test_snap_eases_in(self):
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            self.assertNotEqual(raw, sx)
+            self.assertTrue(min(raw, sx) < xs[-1] < max(raw, sx), (raw, xs[-1], sx))   # part of the way
+            for _ in range(8):                      # (24 px on a 28 ms lag: under half a px after ~108 ms)
+                self.next_frame(xs)
+            self.assertEqual(xs[-1], sx)
+            a._drag_end(ev(px_, py_))
+        self.settle()
+
+    def test_snap_eases_with_still_pointer(self):
+        import time
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            pump(self.app, lambda: xs[-1] == sx, timeout=0.3)      # no more pointer events
+            self.assertEqual(xs[-1], sx)
+            t = time.perf_counter()
+            pump(self.app, lambda: not self.app.clock.busy, timeout=0.5)
+            self.assertLess(time.perf_counter() - t, 0.3)
+            a._drag_end(ev(px_, py_))
+        self.settle()
+
+    def test_drop_lands_on_snap(self):
+        a, b, sx = self.two_apart()
+        xs, patch = self.drive(a)
+        with patch:
+            px_, py_, raw = self.engage(a, xs, sx)
+            a._drag_end(ev(px_, py_))                               # let go mid-ease
+        self.settle()
+        self.assertEqual((a.pad.x, a.win.winfo_rootx()), (sx, sx))
 
 
 if __name__ == "__main__":

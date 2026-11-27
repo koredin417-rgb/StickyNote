@@ -56,6 +56,56 @@ class MotionSettingTest(unittest.TestCase):
         self.assertEqual(self.nw.pad.x, x0 + 300)
         self.assertAlmostEqual(float(self.nw.win.attributes("-alpha")), self.nw.pad.alpha, places=2)
 
+    def test_reduced_keeps_fades_cuts_moves(self):     # B9: decided by kind, not by duration
+        self.app.set_motion("reduced")
+        clock, root = self.app.clock, self.app.root
+        clock.animate(root, "f", 120, lambda k: None, kind="fade")
+        pump(self.app, timeout=0.03)
+        self.assertTrue(clock.active(root, "f"))
+        ks, done = [], []
+        clock.animate(root, "m", 60, ks.append, lambda: done.append(1), kind="move")
+        self.assertEqual((ks, done), ([1.0], []))         # its end at once; its done not inside the call
+        pump(self.app, lambda: done, timeout=0.1)
+        self.assertEqual(done, [1])
+
+    def test_off_writes_end_at_once(self):
+        self.app.set_motion("off")
+        vals, done = [], []
+        self.app.clock.tween(self.app.root, "c", 100.0, 240, frm=0.0, read=lambda: 0.0, write=vals.append,
+                             done=lambda: done.append(1))
+        self.assertEqual((vals, done), ([100.0], []))
+        pump(self.app, lambda: done, timeout=0.1)
+        self.assertEqual(done, [1])
+
+    def test_off_and_reduced_end_states(self):
+        for mode in ("off", "reduced"):
+            with self.subTest(mode=mode):
+                self.app.set_motion(mode)
+                nw, p = self.nw, self.nw.pad
+                nw.minimize()
+                pump(self.app, lambda: nw.minimized and not nw.rolling, timeout=1)
+                self.assertEqual(nw.win.state(), "withdrawn")
+                nw.restore()
+                pump(self.app, lambda: not nw.minimized and not nw.rolling and not self.app.clock.busy, timeout=1)
+                pump(self.app, timeout=0.05)
+                self.assertEqual(nw.win.state(), "normal")
+                self.assertAlmostEqual(float(nw.win.attributes("-alpha")), p.alpha, places=2)
+                self.assertIsNone(getattr(nw, "_rolling_cover", None))
+                nw.toggle_collapse()
+                self.assertTrue(p.collapsed)
+                self.assertIsNone(getattr(nw, "_rolling_cover", None))
+                pump(self.app, lambda: not self.app.clock.busy and not self.app.motion.busy(), timeout=1)
+                nw.toggle_collapse()
+                self.assertFalse(p.collapsed)
+                pump(self.app, lambda: not self.app.clock.busy and not self.app.motion.busy(), timeout=1)
+                other = self.app.new_window(from_window=nw)
+                pump(self.app, lambda: not self.app.clock.busy and not self.app.motion.busy(), timeout=1)
+                other.body.insert("1.0", "x")
+                win = other.win
+                self.app.close_window(other)
+                pump(self.app, lambda: not win.winfo_exists(), timeout=0.5)
+                self.assertFalse(win.winfo_exists())
+
     def test_back_to_default(self):
         self.app.set_motion("off")
         self.app.set_motion(None)

@@ -318,9 +318,9 @@ class CalendarPopup:
             clock.glide(top, rest, CAL_SHOW_MS, frm=tucked, done=done)
             fade(top, "alpha", _alpha(top), self._target_alpha(), CAL_SHOW_MS)
         else:
-            ms = anim.exit_ms(CAL_SHOW_MS)
+            ms = anim.exit_ms(CAL_SHOW_MS)         # (C4: both ease in, so it visibly tucks back, then fades)
             clock.glide(top, tucked, ms, ease=anim.ease_in, done=done)
-            fade(top, "alpha", _alpha(top), 0.0, ms)
+            fade(top, "alpha", _alpha(top), 0.0, ms, ease=anim.ease_in)
 
     def _point(self, on):
         if self._closing:
@@ -483,6 +483,18 @@ class CalendarPopup:
         src = self.app.ring_source              # moving with a group: the line goes around it here
         if src is not None and src._group:
             self.app.ring.move(src._live_ring_boxes())
+
+    def ride(self, x: int, y: int) -> None:
+        """Docked, its note dragged: be at (x, y), the same size, in the frame's one window batch
+        with the note (B6). It keeps its side and its offset; place() then finds it there."""
+        b = self.target_box
+        if b is None or getattr(self, "_closing", False):
+            return
+        x, y = int(x), int(y)
+        anim.clock_of(self.top).move(self.top, x, y)
+        self._xy = (x, y)
+        self.target_box = (x, y, x + b[2] - b[0], y + b[3] - b[1])
+        self.app.space_changed()
 
     def move_to(self, box) -> None:
         """Be exactly ``box`` (a plan's box: the end of a glide, or where one was stopped): its
@@ -995,7 +1007,7 @@ class CalendarPopup:
             self._click_view_now(view)
             if not getattr(self, "_closing", False):
                 self.apply_alpha(animated=True)     # back to what it should be (HOVER_FADE_MS)
-        animate(top, "dip", VIEW_DIP_MS, out, switch)   # (its own key: the switch rides on nothing shared)
+        animate(top, "dip", VIEW_DIP_MS, out, switch, kind="fade")   # (its own key: the switch rides on nothing shared)
 
     def _click_view_now(self, view: str) -> None:
         """The switch itself: the choice is held (calendar_hold) until the stretch rule agrees with it."""
@@ -1194,7 +1206,7 @@ class CalendarPopup:
             return
         start = b.ink_color
         animate(b, "ink", anim.FAST, lambda k: b.set_ink(_mix(self.top, start, target, k)),
-                lambda: b.set_ink(target))
+                lambda: b.set_ink(target), kind="fade")
 
     def head_texts(self) -> list[str]:
         """What the head says, left to right (tests)."""

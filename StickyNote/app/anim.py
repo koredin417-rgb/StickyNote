@@ -5,13 +5,26 @@ value turn toward a new target from where it is, at the speed it has (retargetin
 """
 from __future__ import annotations
 
+import math
+
 FAST, BASE, LONG = 120, 180, 240            # ms: fades and hover / most things / things that travel
+GLIDE_MIN, GLIDE_MAX = 180, 320             # ms: a plan's glide, by how far it goes (glide_ms)
 RETARGET_CAP = 1.5                          # a retarget's start slope: at most this x the normal one
 
 
 def exit_ms(ms: int) -> int:
     """How long something takes to leave when it took ``ms`` to arrive."""
     return round(ms * 2 / 3)
+
+
+def glide_ms(d: float) -> int:
+    """How long a glide of ``d`` px (at 100 %) takes (B7): short hops are quick, long moves
+    don't rush. 100 px -> 200 ms, 600 px -> 287 ms."""
+    return min(GLIDE_MAX, max(GLIDE_MIN, round(140 + 6 * math.sqrt(max(0.0, d)))))
+
+
+def smoothstep(s: float) -> float:
+    return s * s * (3 - 2 * s)
 
 
 def ease_out(s: float) -> float:
@@ -64,7 +77,9 @@ FINE_RELEASE_S = 0.5            # the 1 ms timer is given back this long after t
 IDLE_S = 1.0                    # idle work (gc, idle()) once the clock has been quiet this long
 IDLE_REPEAT_S = 10.0            # ... and garbage is collected at most this often while it stays quiet
 HALF_RATE_BELOW = 0.0155        # a display faster than ~65 Hz may be stepped every second vblank ...
-HALF_RATE_WORK = 0.5            # ... once the last frames' work takes more than this share of a period
+HALF_RATE_WINDOW = 6            # ... decided on the median work of the last this many ticks (B2):
+HALF_RATE_ENTER = 0.8           # above this share of a period it steps every second vblank,
+HALF_RATE_LEAVE = 0.55          # below this share it goes back to every vblank (between: it stays)
 SKIP_MS = 1                     # Animations Off (or Reduced, for movement): it ends at the next frame, never
                                 # inside the call that started it (a done that destroys a window would run
                                 # before the caller's next line)
@@ -80,6 +95,10 @@ def next_deadline(now: float, vblank: float | None, period: float | None, every:
     return vblank + k * step - EARLY
 
 
+def _no_step(_k) -> None:
+    pass
+
+
 class _Anim:
     __slots__ = ("owner", "key", "t0", "ms", "ease", "step", "done", "tween", "v0", "v1", "m", "scalar",
                  "write")
@@ -90,7 +109,10 @@ class _Anim:
         self.tween, self.scalar = False, False
 
     def progress(self, now: float) -> float:
-        return 1.0 if self.ms <= 0 else min(1.0, (now - self.t0) * 1000 / self.ms)
+        """0..1. Before its first frame (t0 None) it has not started: 0."""
+        if self.ms <= 0:
+            return 1.0
+        return 0.0 if self.t0 is None else min(1.0, (now - self.t0) * 1000 / self.ms)
 
     def value(self, s: float) -> tuple:
         if self.m is None:              # an exit (or any curve but ease_out): plain interpolation
@@ -123,10 +145,12 @@ class FrameClock:
         self._grid0: float | None = None            # the loop's start: the fallback grid
         self._timing = None                         # (vblank, period) or None
         self._timing_at = -1.0
-        self._work: list[float] = []                # the last ticks' work, seconds
+        self._work: list[float] = []                # the last ticks' work, seconds (no done, no first ticks)
+        self._half = False                          # stepping every second vblank (_every)
         self._fine = False
         self._fine_job = None
         self._idle_fns: list = []
+        self._quiet_fns: list = []                  # quiet(): run once when the clock next goes still
         self._idle_job = None
         self._idle_since = time.perf_counter()
         self._gc_at = 0.0
@@ -157,21 +181,31 @@ class FrameClock:
         """Do the window moves queued for this frame now (a gesture let go before the frame)."""
         self._flush(time.perf_counter())
 
-    def animate(self, owner, key: str, ms: int, step, done=None, ease=ease_out) -> None:
+    def _instant(self, kind: str) -> bool:
+        """The Animations setting (B9): Off ends everything at once; Reduced ends movement at once
+        and keeps fades (opacity and colour changes)."""
+        return self.mode == "off" or (self.mode == "reduced" and kind != "fade")
+
+    def animate(self, owner, key: str, ms: int, step, done=None, ease=ease_out, kind: str = "move") -> None:
         """``step(ease(t))`` once a frame for ``ms``, t from 0 to 1, then ``done()``. The same
         (owner, key) again replaces the running one (its done is not called). A TclError from
-        step (the widget is gone) ends it quietly. It takes its first step at once."""
+        step (the widget is gone) ends it quietly. It takes its first step at once. ``kind``:
+        "move" or "fade" (the Animations setting, _instant): an instant one takes its last step
+        at once, and its done comes at the next frame (never inside the call that started it)."""
         k = (id(owner), key)
         self._anims.pop(k, None)
-        if self.mode == "off" or (self.mode == "reduced" and ms > FAST):
-            ms = SKIP_MS                            # (the Animations setting: no motion; done at the next frame)
-        a = _Anim(owner, key, time.perf_counter(), ms, ease, done)
+        instant = self._instant(kind)
+        if instant:
+            ms = SKIP_MS
+        a = _Anim(owner, key, None, ms, ease, done)       # (its clock starts at its first frame: _tick)
         a.step = step
         try:
-            step(ease(a.progress(a.t0)))
+            step(ease(1.0 if instant else a.progress(0.0)))
         except tk.TclError:
             return
-        if a.progress(a.t0) >= 1.0:
+        if instant:
+            a.step = _no_step                       # (its end is shown: the frame only runs its done)
+        if a.progress(0.0) >= 1.0:
             if done is not None:
                 done()
             return
@@ -179,17 +213,22 @@ class FrameClock:
         self._wake()
 
     def tween(self, owner, channel: str, to, ms: int, *, read, write, ease=ease_out, frm=None,
-              done=None) -> None:
+              done=None, kind: str | None = None, velocity: tuple | None = None) -> None:
         """Move a value (a float or a tuple of floats) to ``to`` over ``ms``. If (owner, channel)
-        is moving already it turns toward ``to`` from where it is, keeping its speed (no snap)."""
+        is moving already it turns toward ``to`` from where it is, keeping its speed (no snap).
+        ``kind``: "fade" or "move" (default: "alpha" is a fade, every other channel a move); an
+        instant one (_instant) is written at once, its done at the next frame. ``velocity`` (per
+        component, value per second): a value not moving yet starts at that speed (a throw, B8)."""
         k = (id(owner), channel)
         now = time.perf_counter()
-        if self.mode == "off" or (self.mode == "reduced" and channel != "alpha"):
-            ms = SKIP_MS                            # (the Animations setting: no motion; Reduced keeps fades)
-        elif self.mode == "reduced":
-            ms = min(ms, FAST)
         scalar = not isinstance(to, (tuple, list))
         v1 = (float(to),) if scalar else tuple(float(v) for v in to)
+        if self._instant(kind or ("fade" if channel == "alpha" else "move")):
+            self._anims.pop(k, None)
+            write(v1[0] if scalar else v1)          # (Off / Reduced: its end now, no start state first)
+            if done is not None:
+                self.animate(owner, channel, SKIP_MS, _no_step, done)
+            return
         old = self._anims.pop(k, None)
         vel = None
         if old is not None and old.tween:
@@ -200,7 +239,9 @@ class FrameClock:
         else:
             cur = read()
             v0 = (float(cur),) if scalar else tuple(float(v) for v in cur)
-        a = _Anim(owner, channel, now, ms, ease, done)
+        if vel is None and velocity is not None:
+            vel = tuple(float(v) for v in velocity)
+        a = _Anim(owner, channel, None, ms, ease, done)   # (its clock starts at its first frame: _tick)
         a.tween, a.scalar, a.v0, a.v1, a.write = True, scalar, v0, v1, write
         if ease is ease_out:
             a.m = tuple(start_slope(p, q, (vel[i] if vel else 0.0), max(ms, 1) / 1000)
@@ -218,6 +259,17 @@ class FrameClock:
     @staticmethod
     def _write(a, v: tuple) -> None:
         a.write(v[0] if a.scalar else v)
+
+    def quiet(self, fn) -> None:
+        """Run ``fn`` once, as soon as nothing moves: right after the last frame of what runs
+        now, or at the next idle moment when nothing does (work kept out of the frames, B4)."""
+        if self.busy:
+            self._quiet_fns.append(fn)
+            return
+        try:                                        # (looked at again at idle: the caller may start
+            self.root.after_idle(lambda: self._quiet_fns.append(fn) if self.busy else fn())   # its motion after)
+        except tk.TclError:
+            pass
 
     def idle(self, fn) -> None:
         """Run ``fn`` once the clock has been quiet for IDLE_S."""
@@ -251,6 +303,7 @@ class FrameClock:
         self._anims.clear()
         self._requests.clear()
         self._moves.clear()
+        self._quiet_fns.clear()
         if self._fine:
             winapi.fine_timer(False)
             self._fine = False
@@ -258,6 +311,8 @@ class FrameClock:
     # ---- the loop ----------------------------------------------------------------------------
     def _wake(self) -> None:
         if self._job is None:
+            if not self._fine:                      # the first frame's after() is on time too
+                self._fine = bool(winapi.fine_timer(True))
             if self._idle_job is not None:
                 self.root.after_cancel(self._idle_job)
                 self._idle_job = None
@@ -270,6 +325,11 @@ class FrameClock:
             self._timing, self._timing_at = winapi.composition_timing(), now
         return self._timing
 
+    def _period(self) -> float:
+        """The display's frame period (s): DWM's, else the fallback grid."""
+        timing = self._display(time.perf_counter())
+        return timing[1] if timing is not None and timing[1] else GRID
+
     def _schedule(self) -> None:
         now = time.perf_counter()
         timing = self._display(now)
@@ -277,14 +337,28 @@ class FrameClock:
             vblank, period = self._grid0, GRID
         else:
             vblank, period = timing
-        recent = self._work[-10:]
-        every = 2 if (period < HALF_RATE_BELOW and recent
-                      and sum(recent) / len(recent) > HALF_RATE_WORK * period) else 1
-        delay = max(1, round((next_deadline(now, vblank, period, every) - now) * 1000))
+        delay = max(1, round((next_deadline(now, vblank, period, self._every(period)) - now) * 1000))
         try:
             self._job = self.root.after(delay, self._tick)
         except tk.TclError:
             self._job = None
+
+    def _every(self, period: float) -> int:
+        """1: step at every vblank; 2: every second one, while the work of a frame stays too heavy
+        for a fast display (B2). One heavy tick changes nothing: it is the median of the last
+        HALF_RATE_WINDOW ticks, with hysteresis. Too few ticks to say: as it was."""
+        if not period or period >= HALF_RATE_BELOW:
+            self._half = False
+            return 1
+        recent = sorted(self._work[-HALF_RATE_WINDOW:])
+        if len(recent) >= HALF_RATE_WINDOW:
+            n = len(recent)
+            median = (recent[(n - 1) // 2] + recent[n // 2]) / 2
+            if median > HALF_RATE_ENTER * period:
+                self._half = True
+            elif median < HALF_RATE_LEAVE * period:
+                self._half = False
+        return 2 if self._half else 1
 
     def _report(self) -> None:
         try:
@@ -306,10 +380,14 @@ class FrameClock:
                 fn()
             except Exception:
                 self._report()
-        finished, logged = [], set()
+        finished, logged, first = [], set(), False
+        period = self._period()
         for k, a in list(self._anims.items()):
             if self._anims.get(k) is not a:
                 continue                            # replaced or stopped by an earlier step
+            if a.t0 is None:                        # its first frame: one frame in (B1), however long
+                a.t0 = now - period                 # the work between its start and this frame took
+                first = True                        # (a first step builds things: not the frame's load, B2)
             s = a.progress(now)
             try:
                 if a.tween:
@@ -331,13 +409,14 @@ class FrameClock:
                     del self._anims[k]
                 finished.append(a)
         self._flush(now)
+        if not first:                               # the frame's own work: steps and moves, no done (B2)
+            self._work = (self._work + [time.perf_counter() - now])[-HALF_RATE_WINDOW:]
         for a in finished:
             if a.done is not None:
                 try:
                     a.done()
                 except Exception:
                     self._report()
-        self._work = (self._work + [time.perf_counter() - now])[-10:]
         if self.busy:
             if self._job is None:
                 self._schedule()
@@ -359,9 +438,10 @@ class FrameClock:
             return None
 
     def glide(self, win, to, ms: int, *, frm=None, done=None, sized: bool = False, write_extra=None,
-              ease=ease_out) -> None:
+              ease=ease_out, velocity: tuple | None = None) -> None:
         """Glide ``win`` to the box ``to`` (x0, y0, x1, y1): a tween on its "box" channel, so a
-        later glide turns from where it is. ``sized``: its size changes on the way too."""
+        later glide turns from where it is. ``sized``: its size changes on the way too.
+        ``velocity`` (vx, vy) px/s: it starts moving at that speed (a thrown note, B8)."""
         def read():                         # (only when no glide runs: where the window really is)
             x, y = win.winfo_rootx(), win.winfo_rooty()
             return x, y, x + win.winfo_width(), y + win.winfo_height()
@@ -375,7 +455,8 @@ class FrameClock:
                 self.move(win, b[0], b[1])
             if write_extra is not None:
                 write_extra(b)
-        self.tween(win, "box", tuple(to), ms, read=read, write=write, ease=ease, frm=frm, done=done)
+        vel = None if velocity is None else (velocity[0], velocity[1], velocity[0], velocity[1])
+        self.tween(win, "box", tuple(to), ms, read=read, write=write, ease=ease, frm=frm, done=done, velocity=vel)
 
     def _flush(self, now: float) -> None:
         """Apply the frame's window moves: one DeferWindowPos for all of them (BATCH_MOVES),
@@ -415,6 +496,13 @@ class FrameClock:
     # ---- going quiet ------------------------------------------------------------------------
     def _went_idle(self) -> None:
         self._grid0 = None
+        self._work, self._half = [], False          # the next motion starts at full rate (B2)
+        fns, self._quiet_fns = self._quiet_fns, []
+        for fn in fns:
+            try:
+                fn()
+            except Exception:
+                self._report()
         self._idle_since = time.perf_counter()
         try:
             self._fine_job = self.root.after(int(FINE_RELEASE_S * 1000), self._release_fine)

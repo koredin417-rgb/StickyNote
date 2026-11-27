@@ -70,6 +70,7 @@ PALETTE = (
 
 MIN_W, MIN_H = 260, 170
 SAVE_DELAY_MS = 400
+SAVE_SOON_MS = 1000              # save_soon: once the motion an action started is over, at most this late
 SIGNAL_POLL_MS = 10_000          # the signal files (an older launcher or installer): the port is the way now
 DAY_CHECK_MS = 30_000            # (unused: the day is checked at midnight and on WM_TIMECHANGE / resume)
 DOUBLE_CLICK_MS = 260
@@ -82,6 +83,8 @@ PREVIEW_HIDE_MS = 300            # after leaving the card (time to move onto the
 TEXT_MIN_LINES = 3               # on a small image memo the picture shrinks so the text keeps this many lines
 SNAP_REACH = 24                  # a dragged note snaps when an edge comes this close (px at 100 %)
 SNAP_HOLD = 36                   # ... and stays snapped until the pointer goes this far from there
+SNAP_TAU_S = 0.028               # ... a snap eases in (and out) on this lag: 90 % in 65 ms, no overshoot (B8)
+THROW_WINDOW_S, THROW_MIN_S = 0.08, 0.03   # a drop's speed: the pointer's last 80 ms (none under 30 ms)
 SNAP_ALIGN_PULL = 0.25           # touching a note on one side, its edges line up from this far (share of the size)
 NEW_SNAP_PULL = 0.30             # a new note goes into the slot it lands this near to (share of its size)
 PICTURE_CACHE = 96               # shrunk pictures kept for the list, thumbnails and preview
@@ -112,16 +115,16 @@ TIP_FADE_MS = anim.FAST          # a tooltip fades in
 PEEK_OFFSET = (12, 18)           # a day's memo preview: down-right of the pointer (px at 100 %)
 PEEK_DROP = 10                   # ... it drops this far into place when the day changes
 PEEK_DROP_MS = anim.BASE 
-ROLL_MS = anim.BASE              # minimize: the note rolls up to its top bar
-DOCK_SLIDE_MS = anim.BASE        # ... then the bar slides down while fading
+ROLL_MS = anim.BASE              # folding: the note rolls up to its top bar
+MINIMIZE_MS = 280                # minimize: it rolls up, and (overlapping) its bar slides down and fades (B5)
 SCREEN_POLL_MS = 15_000          # the monitors are read this often anyway (a change is an event: "screens")
 SCREEN_SETTLE_POLL_MS = 300      # ... and this often while a change settles
 SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stayed this long
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
 MENU_FADE_MS = anim.FAST         # a menu fades in
-OPEN_FADE_MS = anim.FAST         # a new or reopened note fades in (and blinks)
-CLOSE_FADE_MS = anim.exit_ms(anim.FAST) # a closed note fades out
+OPEN_FADE_MS = 160               # a new or reopened note fades in (and blinks)
+CLOSE_FADE_MS = anim.FAST        # a closed note fades out (ease-in: it lets go, then goes)
 CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
 HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
@@ -343,12 +346,12 @@ def _ease_out(t):
     return 1 - (1 - t) ** 3
 
 
-def animate(widget, key, ms, step, done=None, ease=_ease_out):
+def animate(widget, key, ms, step, done=None, ease=_ease_out, kind="move"):
     """Call ``step(k)`` once a frame for ``ms`` milliseconds, k easing (``ease``, out by
     default) from 0 to 1, then ``done()``: on the app's one frame clock (anim.FrameClock),
     paced to the display. The same key on the same widget replaces the running one. Stops
-    quietly when the widget is gone."""
-    anim.clock_of(widget).animate(widget, key, ms, step, done, ease)
+    quietly when the widget is gone. ``kind``: "move" or "fade" (Animations: Reduced keeps fades)."""
+    anim.clock_of(widget).animate(widget, key, ms, step, done, ease, kind)
 
 
 def stop_animation(widget, key):
@@ -365,14 +368,15 @@ def animating(widget, key) -> bool:
         return False
 
 
-def fade(win, key, start, end, ms, done=None):
+def fade(win, key, start, end, ms, done=None, ease=anim.ease_out):
     """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them). Every
     fade of a window is one "alpha" tween (``key`` is kept for the callers but not used): a fade
-    started while another runs turns from where that one is, never jumping to ``start``."""
+    started while another runs turns from where that one is, never jumping to ``start``. A
+    fade-out that goes with a move away uses ``ease=anim.ease_in`` (B7)."""
     clock = anim.clock_of(win)
     clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
                 write=lambda v: win.attributes("-alpha", v),
-                frm=None if clock.active(win, "alpha") else start, done=done)
+                frm=None if clock.active(win, "alpha") else start, done=done, ease=ease)
 
 
 def _alpha(win) -> float:
@@ -480,13 +484,15 @@ class GroupRing:
             self.cv.pack(fill="both", expand=True)
         self.color = accent_color(near, self.app.theme_colors().bg, "#FFFFFF")
         self._size = self._frame = self._need = None
-        self.move(boxes)
+        self.move(boxes, now=True)          # (withdrawn: put there now, before it shows)
         self.top.attributes("-alpha", 0.0)
         self.top.deiconify()
         self.top.attributes("-topmost", True)
         fade(self.top, "show", 0.0, alpha, MENU_FADE_MS)
 
-    def move(self, boxes):
+    def move(self, boxes, now=False):
+        """Around ``boxes``: the window goes in the frame's one batch with the notes it goes around
+        (B6: never a frame behind them); ``now``: at once."""
         if self.top is None or not boxes:
             return
         px = self.app.px
@@ -522,7 +528,10 @@ class GroupRing:
         geo = f"{w}x{h}+{x0}+{y0}"
         if geo != getattr(self, "_geo", None):
             self._geo = geo
-            self.top.geometry(geo)
+            if now:
+                self.top.geometry(geo)
+            else:
+                anim.clock_of(self.top).move(self.top, x0, y0, w, h)
 
     def hide(self):
         if self.top is not None:
@@ -1226,7 +1235,7 @@ class OverlayScroll:
         def step(k):
             self._k = 1.0 - k
             self._draw()
-        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True))
+        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True), ease=anim.ease_in, kind="fade")
 
     def _geometry(self):
         """(x, y0, y1, w) of the thumb's line on the canvas."""

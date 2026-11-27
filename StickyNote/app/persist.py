@@ -55,6 +55,31 @@ class PersistMixin:
             self.root.after_cancel(self._save_job)
         self._save_job = self.root.after(SAVE_DELAY_MS, self._autosave)
 
+    def save_soon(self):
+        """Save once the motion an action just started is over (B4: no fsync in its first frames):
+        when the frame clock goes still, at most SAVE_SOON_MS from now. Quitting saves anyway."""
+        if self.closed:
+            return
+        self._dirty = True
+        if getattr(self, "_soon_armed", False):
+            return
+        self._soon_armed = True
+        self.clock.quiet(self._save_soon_due)
+        self._soon_job = self.root.after(SAVE_SOON_MS, self._save_soon_due)
+
+    def _save_soon_due(self):
+        if not getattr(self, "_soon_armed", False):
+            return                                  # (the other of its two triggers came first)
+        self._soon_armed = False
+        job, self._soon_job = getattr(self, "_soon_job", None), None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+        if not self.closed:
+            self.save_now()
+
     def _autosave(self):
         self._save_job = None
         self.save_now()

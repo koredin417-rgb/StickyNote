@@ -220,7 +220,7 @@ class ImageViewer:
             last.paste(fade_from.crop((0, 0, min(fade_from.width, img.width),
                                        min(fade_from.height, img.height))), (0, 0))
             photo = self._photo
-            animate(self.canvas, "fade", PICTURE_FADE_MS, lambda k: photo.paste(Image.blend(last, img, k)))
+            animate(self.canvas, "fade", PICTURE_FADE_MS, lambda k: photo.paste(Image.blend(last, img, k)), kind="fade")
 
     # -- < > arrows between the pictures (tabs)
     def arrows(self) -> list[str]:
