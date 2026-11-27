@@ -56,6 +56,8 @@
 
 ### B. The engine (affects every animation)
 
+**Done in Phase 8 (motion polish), 2026-11-27:** B1–B9, and C4's close easing. The results are in the redesign spec under "Phase 8 results". B10–B12 are still open.
+
 | # | Proposal | Today | Change | Benefit | Effort |
 |---|---|---|---|---|---|
 | B1 ✓ | **Start each animation's clock at its first visible frame** | The clock starts when the animation is requested (`anim.py:168, 203`). A new note's other work (linking, glide, flash, a synchronous save) delays the first frame, which shows at 48% opacity. | `t0 = None` until the first tick, then `now − one period`. Also turn on the 1 ms timer when waking from idle. | Entrances show their whole curve; the new-note pop goes away. | S |
@@ -118,8 +120,8 @@
 
 ## 6. Suggested order
 
-1. **Phase 8: quick fixes** (Q1–Q10, C3, C4a, C11). Mostly an afternoon each; Q1 and Q2 are real bugs.
-2. **Phase 9: motion polish** (B1, B2, B4, B7, then B3, B5, B6, B8; B9 with them). The biggest gain in feel per hour.
+1. **Phase 8: motion polish** (B1–B9; done 2026-11-27, chosen first). The biggest gain in feel per hour.
+2. **Phase 9: quick fixes** (Q1–Q10, C3, C11; C4a was done in Phase 8). Mostly an afternoon each; Q1 and Q2 are real bugs.
 3. **Phase 10: calendar motion** (C1, C2, C5, C6, C7, then C8, C9, C10, C12, C13).
 4. **Phase 11: features** (N1, N3, N4 are small and high value; N2 and N5 next; U-items as they fit).
 
