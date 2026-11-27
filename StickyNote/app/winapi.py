@@ -80,6 +80,8 @@ def _gdi():
         g.CreateRoundRectRgn.restype = ctypes.c_void_p
         g.CreateRoundRectRgn.argtypes = (ctypes.c_int,) * 6
         g.DeleteObject.argtypes = (ctypes.c_void_p,)
+        g.CombineRgn.restype = ctypes.c_int
+        g.CombineRgn.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)
         user32.SetWindowRgn.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)
         _GDI = g
     return _GDI
@@ -107,12 +109,12 @@ def clip_height(win, width=None, height=None) -> bool:
     return True                             # (the window owns the region now)
 
 
-def clip_box(win, width, height, radius=0, redraw=False) -> bool:
+def clip_box(win, width, height, radius=0, redraw=False, holes=()) -> bool:
     """Show only the top-left ``width`` x ``height`` px of ``win``, its corners rounded by
     ``radius`` (a window region: DWM's own rounding is off while one is set). A group resize
     moves this edge instead of resizing the window (B3). ``redraw`` False: nothing is repainted
-    (what the window already shows is right: the region only hides part of it). clip_height(win)
-    clears it."""
+    (what the window already shows is right: the region only hides part of it). ``holes``: boxes
+    (x0, y0, x1, y1) left out of it (what is under them shows through). clip_height(win) clears it."""
     hwnd = hwnd_of(win) if IS_WINDOWS else 0
     if not hwnd:
         return False
@@ -122,6 +124,11 @@ def clip_box(win, width, height, radius=0, redraw=False) -> bool:
     rgn = gdi32.CreateRoundRectRgn(0, 0, int(width) + 1, max(1, int(height)) + 1, d, d)
     if not rgn:
         return False
+    for x0, y0, x1, y1 in holes:
+        hole = gdi32.CreateRectRgn(int(x0), int(y0), int(x1), int(y1))
+        if hole:
+            gdi32.CombineRgn(rgn, rgn, hole, 4)      # RGN_DIFF
+            gdi32.DeleteObject(ctypes.c_void_p(hole))
     if not user32.SetWindowRgn(ctypes.c_void_p(hwnd), ctypes.c_void_p(rgn), bool(redraw)):
         gdi32.DeleteObject(ctypes.c_void_p(rgn))
         return False

@@ -9,7 +9,7 @@ import anim
 import texts
 from _support import close_app, make_app, pump
 from texts import tr
-from ui_common import DATE_ROW_H, PopupMenu
+from ui_common import CAL_HEAD_BUTTON_W, DATE_ROW_H, PopupMenu
 
 
 class CalendarLookTest(unittest.TestCase):
@@ -161,7 +161,7 @@ class EnglishHeadTest(unittest.TestCase):
         self.assertFalse(cal.expanded)
         px = self.app.px
         self.assertLessEqual(cal.head.winfo_reqwidth() + 2 * cal.edge, cal.top.winfo_width())
-        self.assertEqual(cal.btn_today.winfo_width(), px(24))
+        self.assertEqual(cal.btn_today.winfo_width(), px(CAL_HEAD_BUTTON_W))   # (20: six fit where five of 24 did)
 
     def test_head_fits_at_100(self):
         self.check(next(iter(self.app.windows.values())))

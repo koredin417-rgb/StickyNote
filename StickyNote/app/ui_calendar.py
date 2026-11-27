@@ -202,12 +202,20 @@ class CalendarPopup:
         self.head_cv = tk.Canvas(head, width=self._head_w, height=self._head_h(), bd=0, highlightthickness=0)
         self.head_cv.pack(side="left", padx=(px(4), 0))
 
-        def top_button(glyph, command, tip):        # the same icons, size and height as before
-            return IconButton(head, self.app, glyph, command, tip, height=TOP_BUTTON_H)
+        def top_button(glyph, command, tip):        # the same icons and height as before; six of them take
+            return IconButton(head, self.app, glyph, command, tip, height=TOP_BUTTON_H,   # the width five did
+                              width=CAL_HEAD_BUTTON_W)
         self.btn_close = top_button(GLYPH["close"], lambda: self.nw.close_calendar(), tr("tip_close_calendar"))
         self.btn_close.pack(side="right", padx=(0, px(4)))
         self.btn_more = top_button(GLYPH["more"], self._more_menu, tr("tip_more"))
         self.btn_more.pack(side="right")
+        # small <-> big in one click (picked 2026-11-27, with the head's double-click): its icon and tip
+        # say what it does next (_show_size_button)
+        self.btn_size = IconButton(head, self.app, GLYPH["expand"], self.toggle_expand, tr("menu_cal_big"),
+                                   height=TOP_BUTTON_H, width=CAL_HEAD_BUTTON_W,     # (its icon fills the box's
+                                   box=round(ICON_BOX * OPTICAL_SCALE[GLYPH["close"]]))  # corners, like x)
+        self.btn_size.pack(side="right")
+        self._show_size_button()
         self.btn_next = top_button(GLYPH["next"], self.next_month, tr("tip_next_month"))
         self.btn_next.pack(side="right")
         self.btn_prev = top_button(GLYPH["prev"], self.prev_month, tr("tip_prev_month"))
@@ -217,6 +225,7 @@ class CalendarPopup:
         self.btn_today.pack(side="right")
         for w in (head, self.head_cv):
             w.configure(cursor="fleur")
+            w.bind("<Double-Button-1>", self._head_double)  # (a day's double-click still makes a memo)
             w.bind("<ButtonPress-1>", self._move_start)
             w.bind("<B1-Motion>", self._move_to)
             w.bind("<ButtonRelease-1>", self._move_end)
@@ -632,6 +641,7 @@ class CalendarPopup:
             pad.calendar_expanded = big
             return
         self.expanded = pad.calendar_expanded = big
+        self._show_size_button()
         self._sizes()
         self.detail_text.configure(wraplength=self.cell_w * 7)
         self._show_state()
@@ -980,6 +990,19 @@ class CalendarPopup:
                 best = (key, w, side)
         return (best[1], best[2]) if best else (self.nw, None)
 
+    def _head_double(self, _event=None):
+        """A double-click on the head (not on a day: that makes a memo) switches small <-> big."""
+        self.toggle_expand()
+        return "break"
+
+    def _show_size_button(self):
+        """The expand button shows what a click does next: big from small, small from big."""
+        b = getattr(self, "btn_size", None)
+        if b is not None:
+            big = getattr(self, "expanded", False)
+            b.set_glyph(GLYPH["shrink"] if big else GLYPH["expand"])
+            b.tooltip.text = tr("menu_cal_small" if big else "menu_cal_big")
+
     def toggle_expand(self):
         """The big month view with each day's memo titles, and back to the small one."""
         self.click_view("mini" if self.expanded else "big")
@@ -1020,9 +1043,21 @@ class CalendarPopup:
         before = tuple(self.target_box)
         if self.docked:
             note = geom.pad_box(pad)
-            side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view=view, keep=True)
+            if view == "big" and pad.calendar_side in calgeom.SIDES:
+                # a view switch must not hop sides (plan_dock's keep needs the whole big box on the
+                # screen, so near an edge it moved below or across): big on its own side, then no
+                # bigger than the room there (below), or mini when not even its least fits
+                side, v, cal_box = pad.calendar_side, "big", self._box_for(pad.calendar_side, note, "big")
+                self._plan_flags = (False, "big")       # (what plan_dock sets for a forced view)
+            else:
+                side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view=view, keep=True)
+            if view == "big" and side is None:             # no side has room for big: it stays mini, docked
+                pad.calendar_hold = None                    # (a view click never undocks it: G7 is for a mini
+                side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view="mini", keep=True)  # that fits nowhere)
             if view == "big" and side is not None:         # big goes no further than the room on its side
-                rw, rh = self._room(cal_box, side)
+                a = app.area_of(note)                       # (the note's own screen: the big box's centre may be on
+                rw = (cal_box[2] - a[0]) if side == "left" else (a[2] - cal_box[0])     # the next one)
+                rh = (cal_box[3] - a[1]) if side == "above" else (a[3] - cal_box[1])
                 lw, lh = self._least_for("big")
                 if lw > rw or lh > rh:                      # not even its least fits: it stays mini
                     pad.calendar_hold = None
@@ -1313,7 +1348,7 @@ class CalendarPopup:
             g.create_image(cx, cy, image=self._tile(self.colors.select, tw, th), tags=("selected",))
             g.tag_lower("selected")
         hover, self._hover = self._hover, None      # (its tile is not drawn under the picked day)
-        self._set_hover(hover)
+        self._set_hover(hover, fade=False)
 
     def _show_picked(self, old, new):
         """The memo titles of ``old`` and ``new`` repainted for who is picked now (big view)."""
@@ -1786,24 +1821,88 @@ class CalendarPopup:
             self.preview.destroy()
             self.preview = None
 
-    def _set_hover(self, d):
+    def _set_hover(self, d, fade=True):
         """Only the two days change (the old one and the new one), not the whole month: a
-        month of many memos took ~20 ms to redraw at every day the mouse crossed."""
+        month of many memos took ~20 ms to redraw at every day the mouse crossed. The day under
+        the mouse fades in (CAL_HOVER_IN_MS) and the one left fades out (CAL_HOVER_OUT_MS), through
+        a fixed ramp of CAL_HOVER_STEPS colours (picked option B, 2026-11-27). ``fade`` False: at once."""
         if d == self._hover or getattr(self, "_paging", False):
             return
         old, self._hover = self._hover, d
         g, c = self.grid, self.colors
+        clock = anim.clock_of(g)
+        n = CAL_HOVER_STEPS
         if self.expanded:
+            keys = self.__dict__.setdefault("_hover_keys", set())
             for day in (old, d):
-                if day is not None and g.find_withtag(f"cell{day.isoformat()}"):
-                    g.itemconfigure(f"cell{day.isoformat()}", fill=self._big_fill(day, day == d))
+                tag = f"cell{day.isoformat()}" if day is not None else None
+                if tag is None or not g.find_withtag(tag):
+                    continue
+                on, key = day == d, f"hover:{day.isoformat()}"
+                end = self._big_fill(day, on)
+                if not fade:
+                    clock.stop(g, key)
+                    g.itemconfigure(tag, fill=end)
+                    continue
+                ramp = [_mix(self.top, g.itemcget(tag, "fill"), end, i / n) for i in range(1, n + 1)]
+
+                def step(k, tag=tag, ramp=ramp):
+                    i = round(k * n)
+                    if i:
+                        g.itemconfigure(tag, fill=ramp[i - 1])
+                keys.add(key)
+                animate(g, key, CAL_HOVER_IN_MS if on else CAL_HOVER_OUT_MS, step,
+                        lambda tag=tag, end=end, key=key: (keys.discard(key), g.itemconfigure(tag, fill=end)),
+                        ease=anim.ease_out if on else anim.ease_in, kind="fade")
             return
+        ramp, shown = self._hover_ramp(), getattr(self, "_hover_shown", None)
+        keys = self.__dict__.setdefault("_hover_keys", set())
+        if shown is not None and g.find_withtag("hover"):
+            clock.stop(g, "hover_in")
+            if fade and shown[2] > 0:               # the day left fades out from where it got (each its
+                self._hover_n = getattr(self, "_hover_n", 0) + 1        # own: a quick sweep fades them all)
+                tag = f"hover_out{self._hover_n}"
+                g.itemconfigure("hover", tags=("hover_out", tag))
+                tw, th, i0 = shown
+                keys.add(tag)
+
+                def out(k, tw=tw, th=th, i0=i0, tag=tag):
+                    i = round(i0 * (1 - k))
+                    if i:
+                        g.itemconfigure(tag, image=self._tile(ramp[i - 1], tw, th))
+                    else:
+                        g.delete(tag)
+                animate(g, tag, CAL_HOVER_OUT_MS, out, lambda tag=tag: (g.delete(tag), keys.discard(tag)),
+                        ease=anim.ease_in, kind="fade")
         g.delete("hover")
+        self._hover_shown = None
         spot = self._spots.get(d.isoformat()) if d is not None else None
         if spot is not None and d != date.today() and d.isoformat() != self.selected:
             cx, cy, tw, th = spot
-            g.create_image(cx, cy, image=self._tile(c.hover, tw, th), tags=("hover",))
+            g.create_image(cx, cy, image=self._tile(ramp[0 if fade else n - 1], tw, th), tags=("hover",))
             g.tag_lower("hover", f"d{d.isoformat()}")
+            self._hover_shown = (tw, th, 1 if fade else n)
+            if fade:
+                def step_in(k, tw=tw, th=th):
+                    i = max(1, round(k * n))
+                    if self._hover_shown is not None and i != self._hover_shown[2]:
+                        self._hover_shown = (tw, th, i)
+                        g.itemconfigure("hover", image=self._tile(ramp[i - 1], tw, th))
+                animate(g, "hover_in", CAL_HOVER_IN_MS, step_in, ease=anim.ease_out, kind="fade")
+
+    def _hover_ramp(self):
+        """The mini view's hover colours, from the grid's own to the full hover colour."""
+        n, c = CAL_HOVER_STEPS, self.colors
+        return [_mix(self.top, self.grid.cget("bg"), c.hover, i / n) for i in range(1, n + 1)]
+
+    def _stop_hover_fades(self):
+        """A full draw: any hover fading in or out ends (the draw shows the day under the mouse as is)."""
+        g, clock = self.grid, anim.clock_of(self.grid)
+        for key in ("hover_in", "hover_out", *self.__dict__.get("_hover_keys", ())):
+            clock.stop(g, key)
+        self.__dict__.get("_hover_keys", set()).clear()
+        g.delete("hover_out")
+        self._hover_shown = None
 
     # -- drawing
     @perf.timed("calendar_draw")
@@ -1813,6 +1912,7 @@ class CalendarPopup:
         y, m = self.month
         self._drawn = self.month
         self._draw_head()
+        self._stop_hover_fades()
         g.delete(f"!{keep}" if keep else "all")
         if self.fit_size:                   # filling a given size: the cells for six weeks (C2)
             self._fit_cells(6)
@@ -1850,6 +1950,7 @@ class CalendarPopup:
                     g.create_image(cx, cy, image=self._tile(c.select, tw, th), tags=("selected",))
                 elif d == self._hover:
                     g.create_image(cx, cy, image=self._tile(c.hover, tw, th), tags=("hover",))
+                    self._hover_shown = (tw, th, CAL_HOVER_STEPS)
                 if d == today:                      # today: a circle in the theme's opposite colour, a bold number
                     fg = self._today_circle(cx, cy, (UI_BOLD, size, "bold"), k, str(d.day))
                 elif not in_month:
@@ -2106,7 +2207,7 @@ class CalendarPopup:
         self._draw_grip()
         self.detail_name.configure(fg=c.sunday)
         self.detail_text.configure(fg=c.fg)
-        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_more, self.btn_close):
+        for b in (self.btn_prev, self.btn_next, self.btn_today, self.btn_size, self.btn_more, self.btn_close):
             b.recolor(c)
         self._draw_head(animated=False)
         self.draw()

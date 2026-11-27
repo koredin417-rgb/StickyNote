@@ -288,10 +288,10 @@ TEXTS = {
     # list page
     "show_all": ("모두 보기", "Show all"),
     "memos_on": ("{day} 메모", "Memos on {day}"),
-    "none_on": ("{day}에는 메모가 없어요", "No memos on {day}"),
+    "none_on": ("메모 없음", "No memos"),                  # (the day is in the bar above: memos_on)
     "none_found": ("검색 결과가 없어요", "No memos match your search"),
     "none_yet": ("아직 메모가 없어요", "No memos yet"),
-    "new_on_day": ("+ 이 날짜에 새 메모", "+ New memo on this day"),
+    "new_on_day": ("새 메모", "New memo"),                 # (with the add icon before it)
     "open_elsewhere": ("다른 노트에서 열림", "open in another note"),
     "current": ("현재 메모", "current"),
     "bin_count": ("휴지통 ({count})", "Bin ({count})"),
