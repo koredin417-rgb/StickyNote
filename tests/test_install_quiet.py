@@ -98,6 +98,10 @@ class InstallQuietTest(unittest.TestCase):
         self.assertEqual(run.calls[-1][1].get("creationflags"), install.NO_WINDOW)
 
 
+    def test_process_list_reads_hangul_paths(self):  # e.g. C:\Users\김민호\AppData\Local\Programs\...
+        self.assertEqual(install._powershell("Write-Output 'C:\\Users\\김민호'").strip(), "C:\\Users\\김민호")
+
+
 _REAL_APP_PROCESSES = install._app_processes        # (setUp stands in for it)
 
 

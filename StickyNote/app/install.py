@@ -292,19 +292,25 @@ def _wait_closed(seconds: float) -> bool:
     return not winapi.instance_running(MUTEX_NAME)
 
 
+def _powershell(command: str) -> str:
+    """What a PowerShell command prints ("" when it can't run). Without a window it gets a console
+    of its own in the system's code page (CP949 here), not install.cmd's UTF-8 one: UTF-8 is asked
+    for, so paths with Hangul in them still match."""
+    command = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                              creationflags=NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _app_processes(dest: Path) -> list[int]:
     """Process ids of Sticky Note runs (StickyNote.exe / pythonw ... main.py) from ``dest`` or from this folder."""
     roots = {str(Path(dest).resolve()).lower(), str(HERE.parent.resolve()).lower()}
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe' OR "
-             f"Name='{EXE_NAME}'\" | "
-             "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-            creationflags=NO_WINDOW).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
+    out = _powershell("Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe' OR "
+                      f"Name='{EXE_NAME}'\" | "
+                      "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }")
     pids = []
     for line in out.splitlines():
         pid, _tab, cmd = line.partition("\t")
