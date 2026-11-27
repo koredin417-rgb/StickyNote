@@ -9,6 +9,12 @@ class CurvesTest(unittest.TestCase):
         self.assertEqual((anim.FAST, anim.BASE, anim.LONG), (120, 180, 240))
         self.assertEqual((anim.exit_ms(120), anim.exit_ms(180)), (80, 120))
 
+    def test_glide_ms_by_distance(self):           # B7: clamp(140 + 6 sqrt(d), 180, 320), d in px at 100 %
+        self.assertEqual([anim.glide_ms(d) for d in (0, 100, 600, 5000)], [180, 200, 287, 320])
+
+    def test_smoothstep(self):
+        self.assertEqual([anim.smoothstep(s) for s in (0, 0.25, 0.5, 1)], [0, 0.15625, 0.5, 1])
+
     def test_hermite_with_normal_slope_is_ease_out_cubic(self):
         for s in (0, .1, .25, .5, .8, 1):
             self.assertAlmostEqual(anim.hermite(10, 110, 300, s), 10 + 100 * anim.ease_out(s))

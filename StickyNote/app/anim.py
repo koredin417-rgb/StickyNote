@@ -5,13 +5,26 @@ value turn toward a new target from where it is, at the speed it has (retargetin
 """
 from __future__ import annotations
 
+import math
+
 FAST, BASE, LONG = 120, 180, 240            # ms: fades and hover / most things / things that travel
+GLIDE_MIN, GLIDE_MAX = 180, 320             # ms: a plan's glide, by how far it goes (glide_ms)
 RETARGET_CAP = 1.5                          # a retarget's start slope: at most this x the normal one
 
 
 def exit_ms(ms: int) -> int:
     """How long something takes to leave when it took ``ms`` to arrive."""
     return round(ms * 2 / 3)
+
+
+def glide_ms(d: float) -> int:
+    """How long a glide of ``d`` px (at 100 %) takes (B7): short hops are quick, long moves
+    don't rush. 100 px -> 200 ms, 600 px -> 287 ms."""
+    return min(GLIDE_MAX, max(GLIDE_MIN, round(140 + 6 * math.sqrt(max(0.0, d)))))
+
+
+def smoothstep(s: float) -> float:
+    return s * s * (3 - 2 * s)
 
 
 def ease_out(s: float) -> float:

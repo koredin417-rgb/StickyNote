@@ -318,9 +318,9 @@ class CalendarPopup:
             clock.glide(top, rest, CAL_SHOW_MS, frm=tucked, done=done)
             fade(top, "alpha", _alpha(top), self._target_alpha(), CAL_SHOW_MS)
         else:
-            ms = anim.exit_ms(CAL_SHOW_MS)
+            ms = anim.exit_ms(CAL_SHOW_MS)         # (C4: both ease in, so it visibly tucks back, then fades)
             clock.glide(top, tucked, ms, ease=anim.ease_in, done=done)
-            fade(top, "alpha", _alpha(top), 0.0, ms)
+            fade(top, "alpha", _alpha(top), 0.0, ms, ease=anim.ease_in)
 
     def _point(self, on):
         if self._closing:

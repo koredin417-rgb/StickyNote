@@ -2788,7 +2788,7 @@ class NoteWindow:
             self.app.request_save()
         animate(win, "roll", ROLL_MS, lambda k: self._roll_geometry(bar + (p.height - bar) * k), done)
 
-    def glide_to(self, x, y, ms=GLIDE_MS, start_at=None):
+    def glide_to(self, x, y, ms=None, start_at=None):
         """Move the note to (x, y) smoothly (ease-out), its docked calendar following: one item
         of app.motion, on its one clock. ``start_at``: where it starts, when the window is not
         there now (a new note sliding out from behind its parent)."""
@@ -2808,17 +2808,21 @@ class NoteWindow:
         plain = (self.bar, self.row)
         buttons = (self.btn_back, self.btn_close)
 
-        def step(k):                        # k * k: stays colored a little longer, then lets go
-            color = _mix(win, start, c.bg, k * k)
-            for w in plain + buttons:
-                w.configure(bg=color)
+        last = [None]
+
+        def step(t):                        # smoothstep: stays colored a little, lets go, settles (B7)
+            color = _mix(win, start, c.bg, anim.smoothstep(t))
+            if color != last[0]:            # (the last stretch is often the same color: no configure)
+                last[0] = color
+                for w in plain + buttons:
+                    w.configure(bg=color)
 
         def done():
             for w in plain:
                 w.configure(bg=c.bg)
             for b in buttons:
                 b.configure(bg=b._rest())
-        animate(win, "flash", FLASH_MS, step, done)
+        animate(win, "flash", FLASH_MS, step, done, ease=lambda t: t)
 
     def _on_configure(self, event):
         if event.widget is not self.win:

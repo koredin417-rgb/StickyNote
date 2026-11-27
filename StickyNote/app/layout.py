@@ -600,7 +600,7 @@ class LayoutMixin:
         return goal
 
     # ---- applying a plan: every move goes through motion (S4) ---------------------------------
-    def apply(self, targets: dict[str, Box], *, undo_label: str | None = None, ms: int = GLIDE_MS,
+    def apply(self, targets: dict[str, Box], *, undo_label: str | None = None, ms: int | None = None,
               done=None, anchor=None, starts: dict | None = None, before: dict | None = None) -> None:
         """Glide every window in ``targets`` to its box, once, on the one clock (Motion.run).
         Window level: a pad id means that note's own box, CAL the calendar's. ``undo_label``

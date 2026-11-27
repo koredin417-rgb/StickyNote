@@ -23,6 +23,28 @@ class MotionClockTest(unittest.TestCase):
     def box(self, dx):
         return {self.nw.pad.id: (self.x + dx, self.y, self.x + dx + self.w, self.y + self.h)}
 
+    def test_plan_ms_by_distance(self):            # B7: a plan's glide takes longer the further it goes
+        import anim
+        self.app.apply(self.box(100))
+        scale = self.app.px(100) / 100
+        self.assertEqual(self.app.motion._items[self.nw.pad.id].ms, anim.glide_ms(100 / scale))
+
+    def test_explicit_ms_kept(self):
+        from ui_common import NEW_SLIDE_MS
+        self.nw.glide_to(self.x + 300, self.y, ms=NEW_SLIDE_MS)
+        self.assertEqual(self.app.motion._items[self.nw.pad.id].ms, 240)
+
+    def test_calendar_close_eases_in(self):         # C4: it visibly tucks back in, then fades
+        import anim
+        self.nw.toggle_calendar()
+        pump(self.app, lambda: self.nw.calendar is not None and not self.app.clock.busy, timeout=2)
+        top = self.nw.calendar.top
+        self.nw.toggle_calendar()
+        for key in ("alpha", "box"):
+            a = self.app.clock._anims[(id(top), key)]
+            self.assertIs(a.ease, anim.ease_in)
+            self.assertEqual(a.ms, 120)
+
     def test_glide_lands_and_ends_once(self):
         ends = []
         self.app.motion.run(self.box(200), done=lambda: ends.append(1))

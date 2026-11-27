@@ -121,8 +121,8 @@ SCREEN_SETTLE_MS = 600           # ... and a change is taken in once it has stay
 SCREEN_SETTLE_MAX_MS = 3000      # ... or, if it keeps changing (a taskbar settling), after this long anyway
 MULTI_MIN_MS = 60                # minimize messages this close together are Win+M: no animation
 MENU_FADE_MS = anim.FAST         # a menu fades in
-OPEN_FADE_MS = anim.FAST         # a new or reopened note fades in (and blinks)
-CLOSE_FADE_MS = anim.exit_ms(anim.FAST) # a closed note fades out
+OPEN_FADE_MS = 160               # a new or reopened note fades in (and blinks)
+CLOSE_FADE_MS = anim.FAST        # a closed note fades out (ease-in: it lets go, then goes)
 CAL_SHOW_MS = anim.BASE          # the calendar slides out from its note and fades in (and back)
 CAL_SLIDE = 8                    # ... this far (px at 100 %)
 HOVER_FADE_MS = anim.FAST        # the calendar turns solid under the mouse
@@ -366,14 +366,15 @@ def animating(widget, key) -> bool:
         return False
 
 
-def fade(win, key, start, end, ms, done=None):
+def fade(win, key, start, end, ms, done=None, ease=anim.ease_out):
     """Fade a whole window's opacity (Tk can only fade windows, not the widgets in them). Every
     fade of a window is one "alpha" tween (``key`` is kept for the callers but not used): a fade
-    started while another runs turns from where that one is, never jumping to ``start``."""
+    started while another runs turns from where that one is, never jumping to ``start``. A
+    fade-out that goes with a move away uses ``ease=anim.ease_in`` (B7)."""
     clock = anim.clock_of(win)
     clock.tween(win, "alpha", end, ms, read=lambda: _alpha(win),
                 write=lambda v: win.attributes("-alpha", v),
-                frm=None if clock.active(win, "alpha") else start, done=done)
+                frm=None if clock.active(win, "alpha") else start, done=done, ease=ease)
 
 
 def _alpha(win) -> float:
@@ -1227,7 +1228,7 @@ class OverlayScroll:
         def step(k):
             self._k = 1.0 - k
             self._draw()
-        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True))
+        animate(self.cv, "fade", SCROLL_FADE_MS, step, lambda: self._hide(now=True), ease=anim.ease_in)
 
     def _geometry(self):
         """(x, y0, y1, w) of the thumb's line on the canvas."""
