@@ -70,7 +70,7 @@ QUIT_SIGNAL = "quit.signal"             # the installer asks a running app to cl
 SETUPS_KEPT = 8                  # monitor setups whose note places are remembered (the ones seen last)
 GRID_HOMES_KEPT = 16             # ... and auto layout homes (one per screen of those setups)
 CLOSED_KEPT = 20                 # closed notes "Reopen closed note" can bring back
-PICTURE_BUDGET = 64 * 1024 * 1024   # bytes of shrunk pictures kept for the list, the strip and the preview
+PICTURE_BUDGET = 16 * 1024 * 1024   # bytes of shrunk pictures kept for the list, the strip and the preview (100+ cards)
 
 
 def _keep_recent(d: dict, key, value, limit=SETUPS_KEPT) -> None:

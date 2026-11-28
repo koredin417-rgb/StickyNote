@@ -14,7 +14,6 @@ class CalendarRenderTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         self.nw.body.insert("1.0", "달력 메모")
         self.nw.sync_from_widgets()
         self.nw.toggle_calendar()

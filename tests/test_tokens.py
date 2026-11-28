@@ -9,7 +9,7 @@ import ui_views as v
 class TokenTest(unittest.TestCase):
     def test_durations_on_tokens(self):
         fast = ("TIP_FADE_MS", "MENU_FADE_MS", "HOVER_FADE_MS", "CHIP_SETTLE_MS", "VIEW_DIP_MS", "CLOSE_FADE_MS")
-        base = ("CAL_SHOW_MS", "ROLL_MS", "TOAST_RISE_MS", "HINT_DROP_MS", "PEEK_DROP_MS",
+        base = ("CAL_SHOW_MS", "ROLL_MS", "TOAST_RISE_MS", "PEEK_DROP_MS",
                 "PICTURE_FADE_MS", "DONE_FADE_MS")
         long_ = ("GLIDE_MS", "NEW_SLIDE_MS", "MONTH_SLIDE_MS", "SCROLL_FADE_MS", "DELETE_FLY_MS")
         self.assertEqual({getattr(u, k) for k in fast} | {n.STICKER_FADE_MS}, {120})

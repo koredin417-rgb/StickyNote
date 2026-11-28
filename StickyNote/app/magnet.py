@@ -129,15 +129,16 @@ class MagnetMixin:
         hid = next((h[1] for h in held if h is not None), sid)
         return out[0], out[1], hid
 
-    def link_drop(self, pids, sid) -> None:
+    def link_drop(self, pids, sid) -> bool:
         """A snapped drop (M2): each of ``pids`` (the dragged group) links to every shape it now
         touches, ``sid`` (the shape ``snap`` snapped to) among them. (Only ``sid`` was linked
         before: in a corner several shapes line it up at once, and the one ``snap`` named could
-        be a note in the same row that does not touch it, so the drop sometimes linked nothing.)"""
+        be a note in the same row that does not touch it, so the drop sometimes linked nothing.)
+        True if a new link formed."""
         shapes = {s.id: s for s in self.space()}
         if shapes.get(sid) is None:
-            return
-        moved = set(pids)
+            return False
+        moved, added = set(pids), False
         slack, reach = self._touch_reach()
         for pid in pids:
             s = shapes.get(pid)
@@ -147,7 +148,8 @@ class MagnetMixin:
                 if tid in moved or t.kind == "held":
                     continue
                 if any(geom.touching(p, q, reach, slack) for p in (s.parts or (s.box,)) for q in (t.parts or (t.box,))):
-                    self.link(pid, tid)
+                    added = self.link(pid, tid) or added
+        return added
 
     # ---- links (M2) ----------------------------------------------------------------------------
     def group_of(self, pid) -> set[str]:
@@ -182,16 +184,21 @@ class MagnetMixin:
         slack = self.px(2)
         return slack, self._gap() + slack
 
-    def link(self, a, b) -> None:
-        """Link two notes (or a note and the calendar). Nothing forms with snapping Off, or with
-        a tile in auto layout."""
+    def link(self, a, b) -> bool:
+        """Link two notes (or a note and the calendar); True if a new link formed. Nothing forms
+        with snapping Off, or with a tile in auto layout."""
         if a == b or self.prefs.snap_gap is None or self.links.linked(a, b):
-            return
+            return False
         if self.prefs.auto_layout and (self._is_tile(a) or self._is_tile(b)):
-            return
+            return False
         self.links.add(a, b)
         self._mirror_links()
+        for pid in (a, b):                  # a group formed: its notes' pictures are taken when idle
+            nw = self.windows.get(pid)
+            if nw is not None:
+                self.shots.stale(nw)
         self.request_save()
+        return True
 
     def unlink(self, pid) -> None:
         """Break every link ``pid`` has in the current setup (Detach)."""

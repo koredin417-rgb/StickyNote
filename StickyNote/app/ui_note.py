@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar as _calendar
 import colorsys
+import gc
 from collections import OrderedDict
 import os
 import sys
@@ -26,6 +27,8 @@ from icon import draw_icon
 from store import (BIN_DAY_CHOICES, CURSOR_COLORS, CUSTOM_COLORS, EMPTY_TITLE, INLINE, LIST_SORTS, MARK_KINDS,
                    PIN_LIMIT_MAX, SNAP_GAPS, STYLES, TIDY_ORDERS, Note, NoteStore, Pad, Prefs)
 from texts import tr
+from caret import GlideCaret
+from rail_calm import CalmRail
 from ui_picture import *  # noqa: F401,F403  (the parts before this one)
 
 animate_ = animate                 # (minimize / restore take an ``animate`` argument of their own)
@@ -171,14 +174,18 @@ class NoteWindow:
         main.pack(side="left", fill="both", expand=True)
 
         def rail_button(glyph, command, tip, master=None, **kw):
-            return IconButton(master or self.rail_top, app, glyph, command, tip, width=RAIL_BUTTON[0],
-                              height=RAIL_BUTTON[1], **kw)
+            def act():                      # (phase 11: not in the moment the rail came back under the pointer)
+                calm = getattr(self, "rail_calm", None)
+                if calm is None or calm.armed():
+                    command()
+            return IconButton(master or self.rail_top, app, glyph, act, tip, width=RAIL_BUTTON[0],
+                              height=RAIL_BUTTON[1], box=RAIL_ICON_BOX, **kw)
         self.btn_memo = rail_button(GLYPH["add"], self.new_memo, tr("tip_new_memo"))
         self.btn_window = rail_button(GLYPH["note"], lambda: app.new_window(self), tr("tip_new_window"),
                                       overlay=GLYPH["add"])
         self.btn_list = rail_button(GLYPH["list"], self.show_list, tr("tip_list"))
         self.btn_cal = rail_button(GLYPH["calendar"], self.toggle_calendar, tr("tip_calendar"))
-        self.btn_pin = rail_button(GLYPH["pin"], self.toggle_pin, tr("tip_pin"))
+        self.btn_pin = rail_button(GLYPH["on_top"], self.toggle_pin, tr("tip_pin"))
         self.nav_buttons = (self.btn_memo, self.btn_window, self.btn_list, self.btn_cal, self.btn_pin)
         # the format buttons: in the rail while the memo text has the focus
         self.btn_bold = rail_button(GLYPH["bold"], lambda: self.toggle_format("b"), tr("tip_bold"))
@@ -192,13 +199,19 @@ class NoteWindow:
                                self.btn_bullets, self.btn_todo, self.btn_picture)
         self.btn_more = rail_button(GLYPH["more"], self._more_menu, tr("tip_more"), master=rail)
         self.btn_more.pack(side="bottom", pady=(0, px(RAIL_PAD)))
-        # a short note gives these up first, in this order: they are in the ⋯ menu then
-        self.give_way = (self.btn_pin, self.btn_cal, self.btn_list) + self.format_buttons[::-1] + (self.btn_window,)
+        # a short note gives these up first, in this order: they are in the ⋯ menu then. The format
+        # buttons go first (B/I/U/S have keys); the calendar button goes last (Q3)
+        self.give_way = (self.btn_picture, self.btn_strike, self.btn_underline, self.btn_italic, self.btn_bold,
+                         self.btn_bullets, self.btn_todo, self.btn_pin, self.btn_list, self.btn_window,
+                         self.btn_cal)
         self._rail_state: tuple | None = None   # the rail buttons shown, in order
         self._rail_hidden: tuple = ()           # ... and those that would show if there were room
         self._editing = False                   # the memo text has the focus: the format buttons show
         self._cover = None                      # the picture standing in while a group resizes
         self._clip = None                       # ... and the box it shows while it does (clip_to)
+        self._wide = False                      # Settings shows in a bigger window (the pad keeps its size)
+        self._dot_due = False                   # phase 10 K: typed since the last saved dot
+        self._dot_state = self._dot_fill = self._dot_at = None     # "flash" / "failed", its colour, place
 
         bar = self.bar = tk.Frame(main, bd=0, height=self._row_h())
         bar.pack(fill="x")
@@ -212,6 +225,9 @@ class NoteWindow:
         self.btn_min = IconButton(bar, app, GLYPH["minimize"], self._min_click, tr("menu_minimize"), width=30,
                                   height=DATE_ROW_H - 2)
         self.btn_min.pack(side="right")
+        # the memo's colour, left of − (phase 11: colour from the note, not only in Settings)
+        self.btn_color = ColorDot(bar, app, self.color_menu, tr("tip_color"), width=26, height=DATE_ROW_H - 2)
+        self.btn_color.pack(side="right")
         # today's day, big, with the month and weekday beside it (folded: the memo's lines; on
         # another page: its name), drawn in one canvas: see _draw_row
         self.row = tk.Canvas(bar, width=1, height=1, bd=0, highlightthickness=0, cursor="fleur")
@@ -284,7 +300,7 @@ class NoteWindow:
         self.undo_button = FlatButton(self.toast, "", self._toast_undo)       # an undo icon
         self.undo_button.configure(padx=px(7))
         self.undo_button.pack(side="left", padx=(0, px(4)))
-        Tooltip(self.undo_button, tr("undo"))
+        self.undo_button.tooltip = Tooltip(self.undo_button, tr("undo"))
 
         # ---- resize grip, bottom-right
         g = px(12)
@@ -305,14 +321,26 @@ class NoteWindow:
         for key, kind in (("b", "b"), ("i", "i"), ("u", "u"), ("t", "s")):     # Windows Sticky Notes keys
             for k in (key, key.upper()):
                 self.body.bind(f"<Control-{k}>", lambda e, kind=kind: self.toggle_format(kind))
-        self.body.bind("<Control-L>", lambda e: self.toggle_bullets())             # Ctrl+Shift+L
-        self.body.bind("<Control-C>", lambda e: self.toggle_todo())                # Ctrl+Shift+C
+        # Ctrl+Shift+L / C: bullets / to-do. Bound with Shift, not by the capital letter: with Caps Lock
+        # on, plain Ctrl+C sends a capital C too (Q1), and then it copies.
+        for k in ("L", "l"):
+            self.body.bind(f"<Control-Shift-{k}>", lambda e: (self.toggle_bullets(), "break")[1])
+        for k in ("C", "c"):
+            self.body.bind(f"<Control-Shift-{k}>", lambda e: (self.toggle_todo(), "break")[1])
+        for w in (self.body, self.header_entry):     # Caps Lock: copy, cut and select all as without it
+            for k, virtual in (("C", "<<Copy>>"), ("X", "<<Cut>>"), ("A", "<<SelectAll>>")):
+                w.bind(f"<Control-Lock-{k}>", lambda e, w=w, v=virtual: (w.event_generate(v), "break")[1])
         # to-do lines: click the box to tick it; the line under the mouse shows undo / remove
         self.body.bind("<Button-1>", self._todo_click, add="+")
         self.body.bind("<Motion>", self._todo_hover, add="+")
         self.body.bind("<Leave>", lambda e: self._later("todo_hover", 80, self._todo_hover_check), add="+")
         self.body.bind("<MouseWheel>", lambda e: self._hide_todo_icons(), add="+")
         self.body_scroll = OverlayScroll(self.body, app, units=3)     # a theme-colored thumb while it scrolls
+        self.caret = GlideCaret(self)       # phase 10 A/B: a caret that glides and breathes
+        self.rail_calm = CalmRail(self)     # phase 11: the rail fades away while the note rests
+        self.body_scroll.on_scroll = lambda: self.caret.follow_soon(jump=True)
+        self.body_scroll.wheel_to = self._body_wheel
+        self.body.bind("<MouseWheel>", self._body_wheel, add="+")    # (phase 10: it glides)
         self._todo_row = None
         self._body_cursor = "xterm"         # changed only when it must: setting it again makes it flicker
         self.todo_undo = tk.Label(self.body, bd=0, cursor="hand2")
@@ -328,8 +356,11 @@ class NoteWindow:
         Tooltip(self.todo_undo, tr("tip_todo_undo"))
         Tooltip(self.todo_remove, tr("tip_todo_remove"))
         for w in (self.body, self.header_entry, win):
-            w.bind("<Control-d>", lambda e: (self.trash_current() if self.view == "home" else None, "break")[1])
-            w.bind("<Control-w>", lambda e: (self.close(), "break")[1])
+            for k in ("d", "Lock-D"):           # (with Caps Lock on the letter comes as a capital)
+                w.bind(f"<Control-{k}>", lambda e: (self.trash_current() if self.view == "home" else None,
+                                                    "break")[1])
+            for k in ("w", "Lock-W"):
+                w.bind(f"<Control-{k}>", lambda e: (self.close(), "break")[1])
         for w in (self.body, self.header_entry, win):
             w.bind("<Control-v>", self._paste)
             w.bind("<Control-V>", self._paste)
@@ -339,13 +370,17 @@ class NoteWindow:
         # a memo picked in the calendar (clicked there, nothing typed or clicked here since): Delete
         # bins it even when the keys stayed with this note; any other key or a click here unpicks it
         self.body.bind("<Delete>", self._delete_picked, add="+")
+        self.body.bind("<Button-3>", lambda e: (self._text_menu(e.x_root, e.y_root), "break")[1])
         for seq in ("<Key>", "<ButtonPress-1>"):
             self.body.bind(seq, lambda e: self.calendar.unpick() if self.calendar else None, add="+")
         # Ctrl+Shift+T: reopen the note closed last (in the memo text it wins over Ctrl+T, strikethrough)
         for w in (self.body, win):
-            w.bind("<Control-Shift-T>", lambda e: (self.app.reopen_closed(self), "break")[1])
-        win.bind("<Control-n>", lambda e: (self.new_memo(), "break")[1])
-        win.bind("<Control-N>", lambda e: (app.new_window(self), "break")[1])
+            for k in ("T", "t"):                # (t: Ctrl+Shift+T with Caps Lock on)
+                w.bind(f"<Control-Shift-{k}>", lambda e: (self.app.reopen_closed(self), "break")[1])
+        for k in ("n", "Lock-N"):
+            win.bind(f"<Control-{k}>", lambda e: (self.new_memo(), "break")[1])
+        for k in ("N", "n"):
+            win.bind(f"<Control-Shift-{k}>", lambda e: (app.new_window(self), "break")[1])
         win.bind("<Escape>", lambda e: self.go_back() if self.view != "home" else None)
         win.bind("<MouseWheel>", self._wheel)
         win.bind("<Configure>", self._on_configure)
@@ -389,6 +424,28 @@ class NoteWindow:
                 w.bind("<FocusIn>", lambda e: winapi.hide_ime_box(self.win.winfo_id()), add="+")
         return self._settings_view
 
+    def end_covers(self):
+        """It is about to move or resize: a slide's picture over it (the rail's, a page change's) is a
+        window of its own that would stay behind; it goes now, the note laid out as it ends."""
+        try:
+            self.rail_calm._end_cover()
+            self._end_page_change()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _free_settings(self):
+        """Settings left a while ago (SETTINGS_KEEP_MS): its page goes (made again when opened)."""
+        sv = self._settings_view
+        if sv is None or self.view == "settings" or self._closing:
+            return
+        self._settings_view = None
+        sv.release()
+        try:
+            sv.frame.destroy()
+        except tk.TclError:
+            pass
+        self.app.clock.idle(gc.collect)     # (widgets in cycles: freed now the app is quiet)
+
     @property
     def bin_view(self) -> BinView:
         if self._bin_view is None:
@@ -396,20 +453,33 @@ class NoteWindow:
             self._bin_view.recolor(self.colors)
         return self._bin_view
 
-    def _show_view(self, view):
+    def _show_view(self, view, animate=True):
         if self.pad.collapsed and getattr(self, "_built", False):   # e.g. a day clicked in the calendar
             self.toggle_collapse()
         self._end_page_change()
         old_view = getattr(self, "view", view)
-        before = self._page_area_picture() if view != old_view else None
+        calm = getattr(self, "rail_calm", None)
+        if calm is not None and calm.hidden and view != "home":    # pages keep the rail: back at once, before
+            calm.show(cover=False)          # the page change takes its picture (phase 11)
+        resize = self._wide and view != "settings"          # (the window changes size: no slide)
+        before = self._page_area_picture() if view != old_view and animate and not resize else None
         forward = PAGE_DEPTH.get(view, 1) >= PAGE_DEPTH.get(old_view, 0)
         self.view = view
+        if view == "settings":              # (kept while it is used; freed a while after it is left)
+            job = self._jobs.pop("free_settings", None)
+            if job is not None:
+                self.win.after_cancel(job)
+        elif self._settings_view is not None:
+            self._later("free_settings", SETTINGS_KEEP_MS, self._free_settings)
+        if resize:
+            self._end_wide()
         PopupMenu.close_current()
         self.list_view.hide_preview()
         for page in (self.list_view, self._settings_view, self._bin_view):
             if page is not None:
                 page.frame.pack_forget()
         self.home.pack_forget()
+        self._show_close()
         if view == "home":
             self.btn_back.pack_forget()
             self.home.pack(fill="both", expand=True)
@@ -420,8 +490,12 @@ class NoteWindow:
             page.frame.pack(fill="both", expand=True)
         self._arrange_chrome()              # (the format buttons are the memo's)
         self.bump_look()
+        if not self.pad.collapsed:
+            self._place_grip()              # (none on Settings)
         tk.Misc.tkraise(self.grip)
         self._place_toast()
+        self.caret.follow_soon(jump=True)
+        self.rail_calm.check_soon()         # (pages: it shows; back on the memo: it may rest again)
         if before is not None:
             self._page_change(before, forward)
 
@@ -442,22 +516,22 @@ class NoteWindow:
             return None
         if box[2] - box[0] < 2 or box[3] - box[1] < 2:
             return None
-        shot = self.app.shots.fresh(self)
+        shot = self.app.shots.fresh(self, keep=False)
         if shot is None:
             return None
         img = shot.crop(box).convert("RGB")
         bg = tuple(round(v * 255) for v in _rgb(self.win, self.colors.bg))
         draw = ImageDraw.Draw(img)
-        for x0, y0, x1, y1 in self._page_overlays():  # (the Undo bar and tips stay live: not in the picture)
+        for x0, y0, x1, y1 in self._page_overlays():  # (the Undo / tip bar stays live: not in the picture)
             draw.rectangle((x0 - box[0], y0 - box[1], x1 - box[0] - 1, y1 - box[1] - 1), fill=bg)
         return img, box
 
     def _page_overlays(self):
-        """Where (in the window) what floats over the pages shows: the Undo / notice bar, the tips."""
+        """Where (in the window) what floats over the pages shows: the Undo / notice / tip bar."""
         out = []
         try:
             wx, wy = self.win.winfo_rootx(), self.win.winfo_rooty()
-            for w in (getattr(self, "toast", None), getattr(self, "hints", None)):
+            for w in (getattr(self, "toast", None),):
                 if w is not None and w.winfo_exists() and w.winfo_ismapped():
                     x, y = w.winfo_rootx() - wx, w.winfo_rooty() - wy
                     out.append((x, y, x + w.winfo_width(), y + w.winfo_height()))
@@ -549,8 +623,156 @@ class NoteWindow:
     def show_settings(self):
         self.sync_from_widgets()
         self.settings_view.sync()
-        self._show_view("settings")
+        folded = self.pad.collapsed
+        grow = not self._wide and (folded or self._settings_box() is not None)
+        self._show_view("settings", animate=not grow)      # (growing: no slide over the old size)
         self.settings_view.reset()
+        if grow:
+            self._widen_when_still()
+
+    def show_keys(self):
+        """Keys and gestures (U1): Settings, with that page open."""
+        self.show_settings()
+        self.settings_view.open("set_keys", animated=False)
+
+    def _settings_box(self):
+        """Where a small note shows Settings: at least SETTINGS_MIN_W x SETTINGS_MIN_H, inside its
+        screen's work area. It grows right and down from where it is; at a right or bottom edge (a
+        corner) it grows left or up instead, its far edges staying put; with its calendar docked on
+        the right, it grows left. None when the note is big enough (or folded, or not shown)."""
+        p, px = self.pad, self.app.px
+        if p.collapsed or self.minimized or self.rolling or self.win.state() != "normal":
+            return None
+        x0, y0, x1, y1 = _pad_box(p)
+        w, h = max(x1 - x0, px(SETTINGS_MIN_W)), max(y1 - y0, px(SETTINGS_MIN_H))
+        if (w, h) == (x1 - x0, y1 - y0):
+            return None
+        ax0, ay0, ax1, ay1 = self.app.area_of((x0, y0, x1, y1))
+        w, h = min(w, ax1 - ax0), min(h, ay1 - ay0)
+        cal = self.calendar
+        y = max(ay0, min(y0, ay1 - h))
+        others = [_pad_box(o.pad) for o in self.app.windows.values()     # (what it would cover: the other
+                  if o is not self and not o._closing and not o.minimized]  # notes; its own docked calendar
+        if cal is not None and cal.target_box is not None and not cal.docked:   # moves aside: _redock_calendar)
+            others.append(tuple(cal.target_box))
+        gap = self.app._gap()
+
+        def covered(x):                     # how much of the others it covers, a snap gap round each
+            box = (x, y, x + w, y + h)
+            return sum(max(0, min(box[2], b[2] + gap) - max(box[0], b[0] - gap))
+                       * max(0, min(box[3], b[3] + gap) - max(box[1], b[1] - gap)) for b in others)
+        # right from where it is, or left from its right edge: the side with room (the user: it ran
+        # into the next note), inside the work area; a tie: right (left when its calendar is there)
+        right, left = max(ax0, min(x0, ax1 - w)), max(ax0, min(x1 - w, ax1 - w))
+        first, second = (left, right) if cal is not None and cal.docked and cal.side == "right" else (right, left)
+        x = second if covered(second) < covered(first) else first
+        return x, y, w, h
+
+    def _widen_when_still(self):
+        """Widen for Settings once the note is still (a folded one unfolds first)."""
+        if self.view != "settings" or self._closing:
+            return
+        if self.rolling or self.app.motion.drives(self.pad.id):
+            self._later("widen", 40, self._widen_when_still)
+            return
+        self._widen_for_settings()
+
+    def _widen_for_settings(self):
+        """Show Settings in the bigger window (_settings_box): only the window grows, so the pad
+        (its saved size, its place among the others, its links) stays as it is; it shows over its
+        neighbours until Settings closes (_end_wide)."""
+        box = self._settings_box()
+        if box is None or self._wide:
+            return
+        self._wide, self._wide_box = True, box
+        x, y, w, h = box
+        self.win.geometry(f"{w}x{h}+{x}+{y}")
+        try:                                # now, not at idle: a <Configure> in between (its docked calendar
+            self.win.update_idletasks()     # placed) read the old size, ended wide, and the pad took the
+        except tk.TclError:                 # bigger size as its own (the user: it froze after a drag)
+            return
+        self.win.lift()
+        self.bump_look()
+        self._redock_calendar()             # its docked calendar beside the window seen, not under it
+
+    def dock_box(self):
+        """The box its docked calendar sits beside: Settings' bigger window while it shows, else the
+        pad's own box."""
+        if self._wide and getattr(self, "_wide_box", None):
+            x, y, w, h = self._wide_box
+            return x, y, x + w, y + h
+        return _pad_box(self.pad)
+
+    def _shift_wide(self, dx, dy):
+        """Settings' bigger window glides by (dx, dy) (its calendar expanding by a screen edge needs the
+        room); the pad stays where it is."""
+        if not self._wide:
+            return
+        x, y, w, h = self._wide_box
+        self._wide_box = (x + dx, y + dy, w, h)
+        win, clock = self.win, anim.clock_of(self.win)
+        try:
+            x0, y0 = win.winfo_rootx(), win.winfo_rooty()
+        except tk.TclError:
+            return
+        clock.tween(win, "wide_shift", (x + dx, y + dy), anim.glide_ms(math.hypot(dx, dy)),
+                    read=lambda: (float(x0), float(y0)), frm=(x0, y0),
+                    write=lambda v: win.winfo_exists() and clock.move(win, round(v[0]), round(v[1])))
+
+    def _redock_calendar(self):
+        """Its docked calendar glides to its side of dock_box (Settings opened or closed, the window
+        moved): it moves; other notes stay where they are (the user's call)."""
+        cal = self.calendar
+        if cal is None or not cal.docked or cal.target_box is None or getattr(cal, "_closing", False):
+            return
+        # the rule of a view click: its side kept, big only as far as the room there, else mini (in
+        # Settings it alone moves). A freer plan hopped above, or stood off, back in a bottom corner.
+        p, was_big = self.pad, cal.expanded
+        flags = (p.calendar_hold, p.calendar_auto_big)
+        try:
+            cal._click_view_now("big" if was_big else "mini")
+        except tk.TclError:
+            return
+        if cal.expanded == was_big:         # (not a click of the user's: their choice flags stay as they were)
+            p.calendar_hold, p.calendar_auto_big = flags
+
+    def _settle_wide(self, off):
+        """Settings' bigger window let go after a drag: it stays as it is, beside the pad as it was
+        held, inside the pad's work area; if the drop glided the pad (so it shrank), it grows again."""
+        if self.view != "settings" or self._closing:
+            return
+        if not self._wide:
+            self._widen_when_still()
+            return
+        _x, _y, w, h = self._wide_box
+        box = _pad_box(self.pad)
+        ax0, ay0, ax1, ay1 = self.app.area_of(box)
+        x = max(ax0, min(box[0] + off[0], ax1 - w))
+        y = max(ay0, min(box[1] + off[1], ay1 - h))
+        self._wide_box = (x, y, w, h)
+        try:
+            if (self.win.winfo_rootx(), self.win.winfo_rooty()) != (x, y):
+                self.win.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
+        self._redock_calendar()
+
+    def _end_wide(self):
+        """Settings closes (or the note folds, goes away, is dragged): the window is the pad again."""
+        if not self._wide:
+            return
+        self._wide = False
+        x0, y0, x1, y1 = _pad_box(self.pad)
+        try:
+            self.win.geometry(f"{x1 - x0}x{y1 - y0}+{x0}+{y0}")
+        except tk.TclError:
+            return
+        self._sized(x1 - x0, y1 - y0)       # (the date row, the rail, a picture: for its own size again)
+        self.bump_look()
+        if self.app.motion.busy():          # (inside a plan that moves it: once it is still)
+            self.app.motion.when_still(self._redock_calendar)
+        else:
+            self._redock_calendar()
 
     def toggle_settings(self):
         if self.view == "settings":
@@ -569,6 +791,9 @@ class NoteWindow:
     # ---- memos -------------------------------------------------------------------
     def _load_note(self, note: Note):
         self._loading = True
+        if self._dot_state != "failed":         # (phase 10 K: another memo, no dot of the last one's)
+            self._dot_due, self._dot_state = False, None
+            self._draw_dot()
         try:
             self.note = note
             self.pad.note_id = note.id
@@ -695,6 +920,7 @@ class NoteWindow:
             typing = False
         text = winapi.composition(self.win.winfo_id()) if typing else ""
         box = self.body.bbox("insert") if text else None
+        self.caret.composing(bool(box))
         if not box:
             self.preedit.place_forget()
             return
@@ -708,6 +934,7 @@ class NoteWindow:
             self._preedit_last = shown
             self.preedit.configure(text=text, font=font, bg=c.bg, fg=c.fg)
             self.preedit.place(x=x, y=y, height=h, bordermode="ignore")   # bbox counts from the outer edge
+            self.caret.follow()             # (after the syllable, gliding as it grows)
         self._later("preedit", 120, self._show_preedit)
 
     def _preedit_font_for(self, bold: bool, italic: bool) -> tkfont.Font:
@@ -836,7 +1063,7 @@ class NoteWindow:
             w, h = self.home.winfo_width(), self.home.winfo_height()
             if w < 8 or h < 8:
                 return None
-            shot = self.app.shots.fresh(self)
+            shot = self.app.shots.fresh(self, keep=False)
             if shot is None:
                 return None
             return shot.crop((x0, y0, x0 + w, y0 + h)), x0, y0
@@ -896,6 +1123,7 @@ class NoteWindow:
         anim.clock_of(btn).animate(btn, "bounce", anim.FAST, step, ease=lambda t: t)
 
     def show_undo(self, note: Note):
+        self._unstick()
         self._notice = False
         self._undo_note = note
         self.toast_text.configure(text=tr("toast_moved"))
@@ -903,13 +1131,49 @@ class NoteWindow:
         self._place_toast()
         self._later("toast", UNDO_MS, self.hide_undo)
 
-    def show_undo_action(self, text, action):
-        """A message in the bottom bar with Undo, which calls ``action``."""
+    def show_undo_action(self, text, action, tip=None):
+        """A message in the bottom bar with Undo (its tooltip ``tip``, else "Undo"), which calls
+        ``action``."""
+        self._unstick()
+        self.undo_button.tooltip.text = tip or tr("undo")
         self._undo_note, self._notice, self._undo_action = None, True, action
         self.toast_text.configure(text=text)
         self.undo_button.pack(side="left", padx=(0, self.app.px(4)))
         self._place_toast()
         self._later("toast", UNDO_MS, self.hide_undo)
+
+    def show_sticky(self, text, action, glyph, tip):
+        """A message in the bottom bar that stays until hide_undo (saving fails, Q8); its button
+        (``glyph``, tooltip ``tip``) runs ``action``."""
+        self.hide_undo(resume=False)
+        self._sticky = True
+        self._undo_note, self._notice, self._undo_action = None, True, action
+        self.toast_text.configure(text=text)
+        self._sticky_glyph = glyph
+        paint_glyph(self.app, self.undo_button, glyph, self.colors.bg, box=ICON_BOX)
+        self.undo_button.tooltip.text = tip
+        self.undo_button.pack(side="left", padx=(0, self.app.px(4)))
+        self._place_toast()
+
+    def show_tip(self, key) -> bool:
+        """A one-time tip (U1, picked style A): the dark bottom bar with ×, for TIP_MS. Once ever
+        per ``key`` (store.TIPS); a save-failed notice is not covered. True if it showed."""
+        if getattr(self, "_sticky", False) and "toast" not in self._jobs:
+            return False                    # (saving fails: that notice stays)
+        if self.pad.collapsed or self._closing:
+            return False                    # (folded: no room for the bar; the tip waits)
+        if not self.app.tip_once(key):
+            return False
+        self.show_sticky(tr(f"once_{key}"), lambda: None, GLYPH["close"], tr("close_tip"))
+        self._later("toast", TIP_MS, self.hide_undo)
+        return True
+
+    def _unstick(self):
+        """A sticky message gives way: the button is Undo again."""
+        if getattr(self, "_sticky", False):
+            self._sticky = False
+            paint_glyph(self.app, self.undo_button, GLYPH["undo_action"], self.colors.bg, box=ICON_BOX)
+            self.undo_button.tooltip.text = tr("undo")
 
     def _toast_undo(self):
         action = self._undo_action
@@ -921,6 +1185,7 @@ class NoteWindow:
 
     def show_notice(self, text):
         """A short message in the bottom bar (no Undo)."""
+        self._unstick()
         self._undo_note, self._notice = None, True
         self.toast_text.configure(text=text)
         self.undo_button.pack_forget()
@@ -932,6 +1197,9 @@ class NoteWindow:
             return
         self.bump_look()
         px = self.app.px
+        width = self.main.winfo_width() if self.main.winfo_width() > 1 else self.pad.width - px(RAIL_W)
+        room = width - px(24) - (self.undo_button.winfo_reqwidth() + px(4) if self.undo_button.winfo_manager() else 0)
+        self.toast_text.configure(wraplength=max(px(80), room - 2 * px(10)), justify="left")
         if self.view == "list":
             lift = self.list_view.bin_row.winfo_reqheight() + px(10)
         else:
@@ -946,7 +1214,11 @@ class NoteWindow:
                     lambda k: toast.place(relx=0.5, rely=1.0, y=y + round(rise * (1 - k)), anchor="s"))
         tk.Misc.tkraise(toast)
 
-    def hide_undo(self):
+    def hide_undo(self, resume=True):
+        """The bottom bar goes. While saving fails (Q8) its notice comes back in its place."""
+        self._unstick()
+        if getattr(self, "rail_calm", None) is not None:
+            self.rail_calm.check_soon()         # (the notice held the rail)
         job = self._jobs.pop("toast", None)
         if job is not None:
             self.win.after_cancel(job)
@@ -955,6 +1227,9 @@ class NoteWindow:
         if self.toast.place_info():         # (it showed: the look changes)
             self.toast.place_forget()
             self.bump_look()
+        if resume and getattr(self.app, "_save_notice", False) and not self._closing \
+                and not self.pad.collapsed:
+            self.show_sticky(tr("save_failed"), self.app.open_folder, GLYPH["folder"], tr("open_folder"))
 
     def undo_trash(self):
         note = self._undo_note
@@ -988,6 +1263,20 @@ class NoteWindow:
         self.win.lift()
         if focus:
             self.body.focus_force()
+
+    def _show_close(self):
+        """× closes the note: on the memo (or folded), not on the list, settings or bin page,
+        where ← and Esc go back (Q7)."""
+        on = self.view == "home" or self.pad.collapsed
+        if on and not self.btn_close.winfo_manager():
+            self.btn_close.pack(side="right", padx=(0, self.app.px(4)), before=self.btn_min)
+        elif not on and self.btn_close.winfo_manager():
+            self.btn_close.pack_forget()
+        dot = self.view == "home" and not self.pad.collapsed    # (the colour dot: the memo's, unfolded)
+        if dot and not self.btn_color.winfo_manager():
+            self.btn_color.pack(side="right", after=self.btn_min)
+        elif not dot and self.btn_color.winfo_manager():
+            self.btn_color.pack_forget()
 
     def close(self):
         if self._closing:
@@ -1093,10 +1382,10 @@ class NoteWindow:
 
     def fade_out(self, done):
         """Fade the note (and its calendar) out, then ``done()``. It takes no input meanwhile."""
+        self._end_wide()
         self._closing = True
         PopupMenu.close_current()
         self.list_view.hide_preview()
-        self.hide_hints()
         wins = [self.win]
         if self.calendar:
             cal = self.calendar
@@ -1104,6 +1393,12 @@ class NoteWindow:
             for key in ("slide", "alpha"):
                 stop_animation(cal.top, key)
             wins.append(cal.top)
+        for cover in (self.rail_calm._cover, getattr(self, "_page_cover", None)):
+            try:                            # a slide's picture still over it fades out with it (it
+                if cover is not None and cover.winfo_exists():  # stayed, then went at once)
+                    wins.append(cover)
+            except tk.TclError:
+                pass
         self.app.space_changed()            # closing: neither takes up space any more
         stop_animation(self.win, "fade")
         starts = [_alpha(w) for w in wins]
@@ -1134,7 +1429,11 @@ class NoteWindow:
             self.bar.configure(height=self._row_h())
 
     def _place_grip(self):
-        """Bottom right; a little in from the corner when DWM rounds it (else the round cuts it)."""
+        """Bottom right; a little in from the corner when DWM rounds it (else the round cuts it). Not on
+        Settings: it has its own size there and is not resized (the user's call, 2026-11-28)."""
+        if getattr(self, "view", "home") == "settings":
+            self.grip.place_forget()
+            return
         inset = 0 if self.edge else self.app.px(3)
         self.grip.place(relx=1, rely=1, anchor="se", x=-inset, y=-inset)
 
@@ -1230,6 +1529,14 @@ class NoteWindow:
         minimize for real. ``rolling`` keeps the pad's saved size out of it (_on_configure)."""
         if self.rolling or self.minimized:
             return
+        self._end_wide()
+        if self.rail_calm._cover is not None or getattr(self, "_page_cover", None) is not None:
+            self.rail_calm._end_cover()     # (a slide's picture would stay behind, over where it was;
+            self._end_page_change()         # the roll's picture is of the note as it is now)
+            try:
+                self.win.update_idletasks()
+            except tk.TclError:
+                return
         cal = self.calendar
         if cal is None or cal.docked:       # an undocked calendar stays on its own meanwhile
             self._hand_over_calendar()
@@ -1347,6 +1654,8 @@ class NoteWindow:
         self.close_calendar(remember=True)
         self.list_view.hide_preview()
         self.cancel_jobs()
+        self.caret.close()
+        self.rail_calm.close()
         stop_animation(self.win, "fade")
         stop_animation(self.win, "roll")
         stop_animation(self.win, "flash")
@@ -1389,8 +1698,7 @@ class NoteWindow:
 
     # ---- calendar ---------------------------------------------------------------------
     def toggle_calendar(self):
-        """One calendar at a time: while one is open, the other notes hide their calendar
-        icon; opened from here anyway (a shortcut, a menu), it moves over to this note."""
+        """One calendar at a time: opened here while another note has it, it moves over to this note."""
         if self.calendar:
             self.close_calendar()
         else:
@@ -1398,6 +1706,7 @@ class NoteWindow:
             if other is not None:
                 other.close_calendar()
             self.make_calendar("user")
+            self.show_tip("calendar")
 
     def make_calendar(self, how="user"):
         """Open its calendar: built withdrawn, planned and shown by CalendarPopup.open (after
@@ -1495,9 +1804,11 @@ class NoteWindow:
         """The rail and the date row for the note's size and state. Folded up: no rail, the date
         row is the whole note. Else the rail shows what fits, top to bottom (give_way: the first
         to go into the ⋯ menu), with the format buttons while the memo text has the focus."""
+        self.btn_cal.set_active(self.calendar is not None)   # (icons C: open, its icon on the chip)
         p, px, win = self.pad, self.app.px, self.win
         if width is None:
             width = win.winfo_width() if win.winfo_width() > 1 else p.width
+        self._show_close()
         if p.collapsed:                     # (no back arrow either: the strip shows the memo)
             if self.rail.winfo_manager():
                 self.rail.pack_forget()
@@ -1507,12 +1818,16 @@ class NoteWindow:
             return
         if height is None:                  # the note's own height: the window may not have caught up
             height = p.height               # yet (just unfolded, or a glide setting out)
-        if not self.rail.winfo_manager():
+        calm = getattr(self, "rail_calm", None)
+        if calm is not None and calm.hidden:    # phase 11, resting: the memo has the rail's room
+            if self.rail.winfo_manager():
+                self.rail.pack_forget()
+        elif not self.rail.winfo_manager():
             self.rail.pack(side="left", fill="y", before=self.main)
         if self.view != "home" and not self.btn_back.winfo_manager():
             self.btn_back.pack(side="left", before=self.row)
-        elsewhere = self.app.calendar_elsewhere(self) is not None      # one calendar at a time
-        wanted = [b for b in self.nav_buttons if not (b is self.btn_cal and elsewhere)]
+        wanted = list(self.nav_buttons)     # (the calendar button too while another note has the
+                                            # calendar: clicking it moves the calendar over, Q3)
         if self._editing and self.view == "home":
             wanted += self.format_buttons
         bh, gap = px(RAIL_BUTTON[1]), px(RAIL_GAP)
@@ -1559,8 +1874,11 @@ class NoteWindow:
             width = self.win.winfo_width() if self.win.winfo_width() > 1 else p.width
         folded = p.collapsed
         page = self.view != "home" and not folded
+        self._dot_at = None
         room = width - 2 * self.edge - self.btn_close.winfo_reqwidth() - self.btn_min.winfo_reqwidth() - px(4)
-        if not folded:
+        if not folded and not page:         # (the colour dot beside − on the memo: phase 11)
+            room -= self.btn_color.winfo_reqwidth()
+        if not folded and self.rail.winfo_manager():      # (resting, phase 11: no rail beside the row)
             room -= px(RAIL_W)
         if page:
             room -= self.btn_back.winfo_reqwidth()
@@ -1579,7 +1897,7 @@ class NoteWindow:
         cv.create_text(x, base - nf.metrics("ascent"), anchor="nw", text=num, font=nf, fill=c.fg, tags=("text",))
         x += nf.measure(num) + px(6)
         if folded:                          # what the memo says, cut to fit (cached: runs at every resize)
-            lines = self._fold_lines()
+            lines = [tr("once_fold")] if getattr(self, "_fold_tip", False) else self._fold_lines()
             full = " · ".join(lines)
             key = (full, room - x, str(sf))
             fit = getattr(self, "_fold_fit", None)
@@ -1589,11 +1907,66 @@ class NoteWindow:
             shown = "\n".join(lines[:6]) + ("\n…" if len(lines) > 6 else "")
             self.date_tip.text = tr("tip_folded", text=shown)
         else:
-            text, fill = fit_text(small, room - x, sf.measure, self._narrowest(sf)), c.muted
+            text, fill = fit_text(small, room - x, sf.measure, self._narrowest(sf)), c.muted_text
             self.date_tip.text = tr("tip_date")
         if text and text != "…":
             cv.create_text(x, base - sf.metrics("ascent"), anchor="nw", text=text, font=sf, fill=fill,
                            tags=("text",))
+        if not folded:                      # phase 10 K: the saved dot's place, after the date
+            end = x + (sf.measure(text) if text and text != "…" else 0) + px(7)
+            self._dot_at = (end, base - sf.metrics("ascent") + sf.metrics("linespace") // 2)
+            self._draw_dot()
+
+    # ---- phase 10 K: the saved dot --------------------------------------------------------------
+    def saved(self, ok):
+        """A save ended (App._save_result). Failed: the dot shows red on a note with typing not yet
+        saved, and stays. Worked: a red dot goes; a note typed in gets the dot once no key came for
+        SAVED_DOT_PAUSE_MS (typing on puts it off: no dot at every autosave while typing)."""
+        if not ok:
+            if self._dot_due:
+                job = self._jobs.pop("saved_dot", None)     # (a flash due from an earlier save: not now)
+                if job is not None:
+                    self.win.after_cancel(job)
+                stop_animation(self.row, "saved_dot")
+                self._dot_state, self._dot_fill = "failed", self.colors.danger
+                self._draw_dot()
+            return
+        if self._dot_state == "failed":
+            self._dot_state = None
+            self._draw_dot()
+        if self._dot_due:
+            self._later("saved_dot", SAVED_DOT_PAUSE_MS, self._flash_dot)
+
+    def _flash_dot(self):
+        self._dot_due = False
+        if self.view != "home" or self.pad.collapsed or self._dot_at is None or self._closing:
+            return
+        c = self.colors
+        ink = readable(self.row, c.muted, c.bg, MARK_CONTRAST)
+        self._dot_state = "flash"
+
+        def step(k):                        # 9 steps of the fade (a smooth dot a step: a small cache)
+            q = round(math.sin(math.pi * k) * 8) / 8
+            fill = _mix(self.row, c.bg, ink, q)
+            if fill != self._dot_fill:
+                self._dot_fill = fill
+                self._draw_dot()
+
+        def done():
+            if self._dot_state == "flash":
+                self._dot_state = None
+                self._draw_dot()
+        animate(self.row, "saved_dot", SAVED_DOT_MS, step, done, ease=lambda t: t, kind="fade")
+
+    def _draw_dot(self):
+        """The dot as it is now (_draw_row redraws everything: it puts it back)."""
+        cv = self.row
+        cv.delete("saved")
+        if self._dot_state is None or self._dot_at is None or self._dot_fill is None:
+            return
+        x, y = self._dot_at
+        self._dot_photo = dot_photo(self.app, self._dot_fill, self._dot_fill, self.app.px(SAVED_DOT))   # (smooth)
+        cv.create_image(x, y, image=self._dot_photo, tags=("saved",))
 
     def row_texts(self) -> list[str]:
         """What the date row shows, left to right (tests, the perf tools)."""
@@ -1626,19 +1999,22 @@ class NoteWindow:
         self.rail_sep.configure(bg=rc.border)
         for b in self.rail_buttons:
             b.recolor(rc, strong=(b is self.btn_pin and p.pinned))
-        self.btn_pin.set_glyph(GLYPH["pinned" if p.pinned else "pin"])
         for b in (self.btn_back, self.btn_min, self.btn_close):
             b.recolor(c)
+        self.btn_color.set(n.color, c)
+        self.rail_calm.recolor()
         self._draw_row()
         cursor = self.app.cursor_color(c.bg)        # the main theme color's opposite
         self.header_entry.configure(bg=c.bg, fg=c.fg, insertbackground=cursor,
                                     selectbackground=c.select, selectforeground=c.fg,
                                     font=(n.font_family, n.font_size + 3, "bold"))
-        self.header_sep.configure(bg=c.border)
+        self.header_sep.configure(bg=c.bg)  # space only under the title, no rule (picked 2026-11-28)
         self.viewer.recolor(c)
         self.body.configure(bg=c.bg, fg=c.fg, insertbackground=cursor,
                             selectbackground=c.select, selectforeground=c.fg,
                             inactiveselectbackground=c.select, font=(n.font_family, n.font_size))
+        self.caret.recolor(cursor, c.bg)
+        self.caret.follow_soon(jump=True)   # (a new font: a new height)
         self.body_scroll.recolor(c.bg)
         fam, size = n.font_family, n.font_size
         self.body.tag_configure("b", font=(fam, size, "bold"))
@@ -1666,11 +2042,13 @@ class NoteWindow:
         self.toast_text.configure(bg=c.fg, fg=c.bg)
         self.undo_button._bg, self.undo_button._hover = c.fg, toast_hover
         self.undo_button.configure(bg=c.fg, fg=c.bg)
-        paint_glyph(self.app, self.undo_button, GLYPH["undo_action"], c.bg, box=ICON_BOX)
+        glyph = self._sticky_glyph if getattr(self, "_sticky", False) else GLYPH["undo_action"]
+        paint_glyph(self.app, self.undo_button, glyph, c.bg, box=ICON_BOX)
         if self.period_band.winfo_manager():
             self._draw_period_band()
         self.win.attributes("-alpha", p.alpha)
         self.win.attributes("-topmost", p.pinned)
+        self.btn_pin.set_active(p.pinned)       # (icons C: on, it sits on its chip)
         if self.calendar:
             self.calendar.recolor(self.app.theme_colors())
             self.calendar.apply_alpha()
@@ -1715,6 +2093,7 @@ class NoteWindow:
 
     def toggle_pin(self):
         self.pad.pinned = not self.pad.pinned
+        self.btn_pin.set_active(self.pad.pinned)     # (icons C: keep on top shows it is on)
         self.app.request_save()
         self.apply_look()
 
@@ -1765,27 +2144,37 @@ class NoteWindow:
         menu.popup(x, y)
 
     def _more_menu(self, x=None, y=None) -> PopupMenu:
-        """The rail's ⋯: layout, move to the bin, settings, minimize; then the rail buttons a
-        short note has no room for, in the rail's order."""
+        """The rail's ⋯: the same menu as a right-click on the top row (U2), then the rail buttons
+        a short note has no room for, in the rail's order."""
         if x is None:
             b = self.btn_more
             x, y = b.winfo_rootx() + b.winfo_width(), b.winfo_rooty()
-        menu = PopupMenu(self.app, self.frame)
-        menu.add(tr("menu_style"), lambda: self._style_menu(x, y), icon=GLYPH["style"])
-        if self.view == "home":
-            menu.add(tr("menu_trash"), self.trash_current, icon=GLYPH["trash"], key="Ctrl+D")
-        menu.add(tr("menu_settings"), self.show_settings, icon=GLYPH["gear"])
-        menu.add(tr("menu_minimize"), self.minimize_button, icon=GLYPH["minimize"])
-        hidden = self.rail_hidden()
-        if hidden:
-            menu.separator()
-        named = {self.btn_window: ("menu_new_window", False), self.btn_list: ("menu_list", False),
-                 self.btn_cal: ("menu_calendar", self.calendar is not None),
-                 self.btn_pin: ("menu_on_top", self.pad.pinned)}
+        return self._note_menu(x, y, rail=True)
+
+    def _rail_items(self, menu):
+        """The rail buttons a short note has no room for (its ⋯ shows them)."""
+        in_menu = (self.btn_memo, self.btn_window, self.btn_list, self.btn_cal, self.btn_pin)   # (_note_menu has them)
+        hidden = [b for b in self.rail_hidden() if b not in in_menu]
+        if not hidden:
+            return
+        menu.separator()
         for b in hidden:
-            key, checked = named.get(b, (None, b.active))
-            label = tr(key) if key else b.tooltip.text.split("\n")[0]
-            menu.add(label, b._command, checked=checked, icon=GLYPH["note"] if b is self.btn_window else b.glyph)
+            menu.add(b.tooltip.text.split("\n")[0], b._command, checked=b.active, icon=b.glyph)
+
+    def _text_menu(self, x, y) -> PopupMenu:
+        """Right-click in the memo text: cut, copy, paste, select all, bullets and to-do (U2)."""
+        b = self.body
+        menu = PopupMenu(self.app, self.frame)
+        menu.add(tr("menu_cut"), lambda: b.event_generate("<<Cut>>"), icon=GLYPH["cut"], key="Ctrl+X")
+        menu.add(tr("menu_copy"), lambda: b.event_generate("<<Copy>>"), icon=GLYPH["copy"], key="Ctrl+C")
+        menu.add(tr("menu_paste"), lambda: self._paste() or b.event_generate("<<Paste>>"),
+                 icon=GLYPH["paste"], key="Ctrl+V")
+        menu.add(tr("menu_select_all"), lambda: b.event_generate("<<SelectAll>>"), icon=GLYPH["select_all"],
+                 key="Ctrl+A")
+        menu.separator()
+        menu.add(tr("tip_bullets").split(" (")[0], self.toggle_bullets, icon=GLYPH["bullets"], key="Ctrl+Shift+L")
+        menu.add(tr("tip_todo").split("\n")[0].split(" (")[0], self.toggle_todo, icon=GLYPH["todo"],
+                 key="Ctrl+Shift+C")
         menu.popup(x, y)
         return menu
 
@@ -1834,7 +2223,7 @@ class NoteWindow:
             except Exception:
                 failed.append(os.path.basename(path))
         if failed:
-            messagebox.showerror(APP_NAME, tr("could_not_open") + "\n" + "\n".join(failed), parent=self.win)
+            messagebox.showerror(tr("app_title"), tr("could_not_open") + "\n" + "\n".join(failed), parent=self.win)
 
     def _image_menu(self, event, index=None):
         menu = PopupMenu(self.app, self.win, self.colors)
@@ -1862,11 +2251,27 @@ class NoteWindow:
         return "break"
 
     # ---- edits ----------------------------------------------------------------------------------
+    def _body_wheel(self, e):
+        """Phase 10: a notch scrolls the memo text three lines, gliding (Reduced and Off: at once); a
+        notch meanwhile goes on from where the glide was going. The text never bounces."""
+        b = self.body
+        line = int(b.tk.call("font", "metrics", b.cget("font"), "-linespace"))
+        glide = getattr(self, "_wheel_glide", None)
+        if glide is None:
+            glide = self._wheel_glide = WheelGlide(b, lambda n: b.yview_scroll(n, "pixels"))
+        glide.add((-1 if e.delta > 0 else 1) * 3 * line)
+        return "break"
+
     @perf.timed("body_modified")
     def _on_body_modified(self, _event=None):
         if not self.body.edit_modified():
             return
         self.body.edit_modified(False)
+        if not getattr(self, "_loading", False):   # typed: a saved dot is due after the next save and a pause
+            self._dot_due = True
+            job = self._jobs.pop("saved_dot", None)
+            if job is not None:
+                self.win.after_cancel(job)
         b = self.body
         count = int(b.index("end-1c").split(".")[0])
         row = int(b.index("insert").split(".")[0])
@@ -1961,14 +2366,17 @@ class NoteWindow:
         b = self.body
         if self.view != "home":
             return "break"
+        span = None
         if b.tag_ranges("sel"):
             on = not self._covered(kind, "sel.first", "sel.last")
             (b.tag_add if on else b.tag_remove)(kind, "sel.first", "sel.last")
             self._refresh_combined()
             self.sync_from_widgets()
+            span = (b.index("sel.first"), b.index("sel.last"))
         else:
             self._pending = self._formats_at_cursor() ^ {kind}
         self._update_format_buttons()
+        self._confirm(dict(zip(MARK_KINDS, self.format_buttons))[kind], *(span or ()))
         b.focus_set()
         return "break"
 
@@ -2040,6 +2448,7 @@ class NoteWindow:
         self._refresh_combined()
         self.sync_from_widgets()
         self._update_format_buttons()
+        self.caret.follow_soon()            # (a code edit moves the insert point without a key)
 
     def _line_rows(self):
         b = self.body
@@ -2057,6 +2466,27 @@ class NoteWindow:
     def toggle_todo(self):
         """To-do boxes on the cursor's line or the selected lines; off if they all are to-dos."""
         return self._toggle_line_mark(TODO, (TODO, DONE))
+
+    def _confirm(self, button, start=None, end=None):
+        """Phase 10 I: a format, bullets or a to-do switched: its rail button pulses once (only when
+        the rail shows it: in ⋯ or with the rail hidden, the tint alone tells), and the changed text
+        (start..end) is tinted a moment, fading into the selection or the page. Off: neither."""
+        if self.app.clock.mode == "off":
+            return
+        if button in self.rail_shown() and not self.rail_calm.hidden:
+            button.pulse()
+        if start is None:
+            return
+        b, c = self.body, self.colors
+        b.tag_remove("confirm", "1.0", "end")
+        b.tag_add("confirm", start, end)
+        b.tag_raise("confirm")
+        strong = _mix(b, c.select, c.fg, 0.22)
+
+        def step(k):
+            under = c.select if b.tag_ranges("sel") else c.bg
+            b.tag_configure("confirm", background=_mix(b, strong, under, k))
+        animate(b, "confirm", 2 * FORMAT_CONFIRM_MS, step, lambda: b.tag_remove("confirm", "1.0", "end"), kind="fade")
 
     def _toggle_line_mark(self, mark, kind):
         b = self.body
@@ -2076,6 +2506,9 @@ class NoteWindow:
                     b.insert(f"{r}.0", mark, ())            # () = no tags: plain, whatever is around it
         self._edit(change)
         self._after_edit()
+        self._update_format_buttons()
+        self._confirm(self.btn_bullets if mark == BULLET else self.btn_todo,
+                      f"{min(rows)}.0", f"{max(rows)}.end")
         b.focus_set()
         return "break"
 
@@ -2095,6 +2528,9 @@ class NoteWindow:
         self._edit(lambda: (b.delete(f"{row}.0", f"{row}.1"), b.insert(f"{row}.0", (DONE if done else TODO)[0], ())))
         self._after_edit()
         self._show_todo_icons(row)
+        tour = getattr(self.app, "tour", None)
+        if done and tour is not None:       # the welcome memo's to-do starts the tour (backlog 5)
+            self.win.after_idle(lambda: tour.ticked(self))
         if done:                            # dark for a moment, then fading to the done gray
             c = self.colors
             b.tag_remove("done_fade", "1.0", "end")
@@ -2102,6 +2538,15 @@ class NoteWindow:
             b.tag_raise("done_fade")
             animate(b, "done_fade", DONE_FADE_MS,
                     lambda k: b.tag_configure("done_fade", foreground=_mix(b, c.fg, c.muted, k)),
+                    lambda: b.tag_remove("done_fade", "1.0", "end"), kind="fade")
+        else:                               # unticked: from the done gray back to the ink (phase 10 D)
+            c = self.colors
+            b.tag_remove("done_fade", "1.0", "end")
+            b.tag_configure("done_fade", foreground=c.muted)
+            b.tag_add("done_fade", f"{row}.2", f"{row}.end")
+            b.tag_raise("done_fade")
+            animate(b, "done_fade", DONE_FADE_MS,
+                    lambda k: b.tag_configure("done_fade", foreground=_mix(b, c.muted, c.fg, k)),
                     lambda: b.tag_remove("done_fade", "1.0", "end"), kind="fade")
 
     def remove_todo(self, row):
@@ -2236,6 +2681,7 @@ class NoteWindow:
         return "break"
 
     def _update_format_buttons(self):
+        self.caret.follow_soon()            # (the insert point moved: a key, a click, code)
         was = tuple(b.active for b in self.format_buttons)
         fmt = self._formats_at_cursor()
         for kind, button in zip(MARK_KINDS, self.format_buttons):
@@ -2268,6 +2714,7 @@ class NoteWindow:
 
     # ---- move / resize ------------------------------------------------------------------------------
     def _drag_start(self, event):
+        self.rail_calm._end_cover()         # (phase 11: a fading picture would stay where the note was)
         self.date_tip.hide()
         self.app.moving = True              # docked calendars keep their side while things move
         for w in self.app.group_windows(self.pad.id):
@@ -2277,6 +2724,11 @@ class NoteWindow:
         self._snap_shown = (self.pad.x, self.pad.y)                                 # (B8: _ease_snap)
         self._throw = [(time.perf_counter(), event.x_root, event.y_root)]          # (B8: _release_velocity)
         self._drag = (event.x_root - self.win.winfo_rootx(), event.y_root - self.win.winfo_rooty())
+        self._wide_off = None
+        if self._wide:                      # Settings' bigger window: it moves as it is (the user: it shrank
+            p = self.pad                    # under the pointer); the pad goes along under it, the drag
+            self._wide_off = (self.win.winfo_rootx() - p.x, self.win.winfo_rooty() - p.y)     # works on the pad
+            self._drag = (event.x_root - p.x, event.y_root - p.y)
         self._pointer = None
         self._drag_from, self._drag_alt = (self.pad.x, self.pad.y), bool(event.state & 0x20000)
         self._drag_ctrl, self._drag_pt, self._grid_key = bool(event.state & 0x4), (event.x_root, event.y_root), None
@@ -2307,6 +2759,7 @@ class NoteWindow:
         # offsets from where their notes are now
         self._cal_offsets = {}
         for w in [self] + [o for o, _dx, _dy in self._group]:
+            w.end_covers()                  # (a slide's picture stays where it was: the user saw it)
             c = w.calendar
             if c is not None and c.docked and getattr(c, "_xy", None) and c.top.winfo_ismapped():
                 self._cal_offsets[w] = (c._xy[0] - w.pad.x, c._xy[1] - w.pad.y)
@@ -2316,8 +2769,14 @@ class NoteWindow:
 
     def _top_menu(self, event):
         """Right-click on the top row: what the icons, double-clicks and Alt do, in one menu."""
+        return self._note_menu(event.x_root, event.y_root)
+
+    def _note_menu(self, x, y, rail=False) -> PopupMenu:
+        """The note's one menu (right-click on the top row, and ⋯ with ``rail``: plus the rail
+        buttons a short note has no room for)."""
         app = self.app
         menu = (PopupMenu(app, self.frame)
+                .swatches(self._swatch_colors(), self.note.color, self.set_color)
                 .add(tr("menu_new_memo"), self.new_memo, icon=GLYPH["add"], key="Ctrl+N")
                 .add(tr("menu_new_window"), lambda: app.new_window(self), icon=GLYPH["note"]))
         if app.can_reopen():
@@ -2325,16 +2784,15 @@ class NoteWindow:
                      key="Ctrl+Shift+T")
         menu.add(tr("menu_calendar"), self.toggle_calendar, checked=self.calendar is not None,
                  icon=GLYPH["calendar"])
-        menu.add(tr("menu_on_top"), self.toggle_pin, checked=self.pad.pinned, icon=GLYPH["pin"])
+        menu.add(tr("menu_on_top"), self.toggle_pin, checked=self.pad.pinned, icon=GLYPH["on_top"])
         if any(w.pad.pinned for w in app.windows.values() if w is not self):
-            menu.add(tr("menu_unpin_all"), app.unpin_all, icon=GLYPH["unpin"])
-        x, y = event.x_root, event.y_root
+            menu.add(tr("menu_unpin_all"), app.unpin_all, icon=GLYPH["on_top"])
         hidden = [(glyph, key, cmd) for glyph, key, cmd, b in (
             (GLYPH["list"], "menu_list", self.show_list, self.btn_list),
             (GLYPH["gear"], "menu_settings", self.show_settings, None),
             (GLYPH["style"], "menu_style", lambda: self._style_menu(x, y), None),
             (GLYPH["trash"], "menu_trash", self.trash_current, None),
-            (GLYPH["minimize"], "menu_minimize", self.minimize, None))
+            (GLYPH["minimize"], "menu_minimize", self.minimize_button, None))
             if (b is None or b not in self.rail_shown()) and (key != "menu_trash" or self.view == "home")]
         menu.separator()                    # what the rail does not show (its ⋯ has it too)
         for glyph, key, cmd in hidden:
@@ -2355,8 +2813,27 @@ class NoteWindow:
         menu.add(tr("menu_group_drag"), app.toggle_group_drag, checked=app.prefs.group_drag, icon=GLYPH["link"])
         if len(app.group_of(self.pad.id)) > 1:
             menu.add(tr("menu_detach"), lambda: app.detach(self), icon=GLYPH["cut"])
-        menu.add(tr("menu_hints"), self.show_hints, icon=GLYPH["info"])
+        menu.add(tr("menu_keys"), self.show_keys, icon=GLYPH["info"])
+        if rail:
+            self._rail_items(menu)
         menu.popup(x, y)
+        return menu
+
+    def _swatch_colors(self):
+        """The 10 colours, then the personal ones (Settings), each once."""
+        base = [c.upper() for _n, c in PALETTE]
+        out = list(base)
+        for c in self.app.prefs.custom_colors:
+            if c.upper() not in out:
+                out.append(c.upper())
+        return out
+
+    def color_menu(self):
+        """The colour dot (phase 11): the palette under it; a click sets the memo's colour."""
+        d = self.btn_color
+        menu = PopupMenu(self.app, self.frame).swatches(self._swatch_colors(), self.note.color, self.set_color)
+        menu.popup(d.winfo_rootx(), d.winfo_rooty() + d.winfo_height())
+        return menu
 
     def _tidy_menu(self, x, y):
         """"Tidy up notes…": every note on this screen into neat columns, in one of the sizes."""
@@ -2377,42 +2854,6 @@ class NoteWindow:
             menu.add(tr(f"tidy_order_{o}"), lambda o=o: order(o), checked=app.prefs.tidy_order == o)
         menu.popup(x, y)
 
-    # ---- the one-time hint about controls that are easy to miss ------------------------
-    def show_hints(self):
-        self.hide_hints()
-        c, px = self.app.theme_colors(), self.app.px          # the main theme color, like menus and tips
-        box = self.hints = tk.Frame(self.main, bg=c.border, bd=0)
-        inner = tk.Frame(box, bg=c.bg, bd=0)
-        inner.pack(fill="both", expand=True, padx=1, pady=1)
-        width = max(px(180), (self.main.winfo_width() if self.main.winfo_width() > 1
-                              else self.pad.width - px(RAIL_W)) - px(28))
-        tk.Label(inner, text=tr("hint_title"), bg=c.bg, fg=c.fg, anchor="w",
-                 font=(UI_BOLD, 10, "bold")).pack(fill="x", padx=px(12), pady=(px(10), px(4)))
-        tk.Label(inner, text=tr("hint_lines"), bg=c.bg, fg=c.muted, anchor="w", justify="left",
-                 wraplength=width - px(26), font=(UI_FONT, 9)).pack(fill="x", padx=px(12))
-        ok = FlatButton(inner, tr("hint_ok"), self.close_hints)
-        ok.recolor(c)
-        ok.configure(font=(UI_BOLD, 9, "bold"))
-        ok.pack(anchor="e", padx=px(10), pady=(px(6), px(10)))
-        y, drop = self._row_h() + px(8), px(HINT_DROP)
-        animate(box, "drop", HINT_DROP_MS,         # drops HINT_DROP px into place
-                lambda k: box.place(relx=0.5, y=y - round(drop * (1 - k)), anchor="n", width=width))
-        tk.Misc.tkraise(box)
-        self.bump_look()
-
-    def hide_hints(self):
-        box = getattr(self, "hints", None)
-        if box is not None:
-            stop_animation(box, "drop")
-            box.destroy()
-            self.hints = None
-            self.bump_look()
-
-    def close_hints(self):
-        self.hide_hints()
-        self.app.prefs.hints_seen = True
-        self.app.request_save()
-
     def _live_ring_boxes(self):
         """Each moving note's box where the drag put it, and its docked calendar's where that
         is now: on whichever side it went (it changes side near the screen's edge)."""
@@ -2422,7 +2863,12 @@ class NoteWindow:
             if not w.win.winfo_exists():
                 continue
             x, y = dropped.get(w, (w.pad.x, w.pad.y))
-            boxes.append((x, y, x + w.pad.width, y + _shown_h(w.pad)))
+            off = getattr(w, "_wide_off", None) if w._wide else None
+            if off is not None:             # Settings' bigger window: the line goes round what is seen
+                _bx, _by, ww, wh = w._wide_box
+                boxes.append((x + off[0], y + off[1], x + off[0] + ww, y + off[1] + wh))
+            else:
+                boxes.append((x, y, x + w.pad.width, y + _shown_h(w.pad)))
             cal = w.calendar
             if cal is not None and cal.docked and getattr(cal, "_xy", None) and cal.top.winfo_ismapped():
                 off = getattr(self, "_cal_offsets", {}).get(w)
@@ -2557,12 +3003,13 @@ class NoteWindow:
         self._snap_id = None
         self._drag_pt = (px_, py_)
         raw = (x, y)
-        if not state & 0x20000 and getattr(self, "_grid_key", None) is None:     # Alt held: move freely
-            x, y = self._snapped(x, y, group)
-        if getattr(self, "_snap_res", None) is not None:
+        off = getattr(self, "_wide_off", None) if self._wide else None   # (Settings' bigger window: no snap
+        if off is None and not state & 0x20000 and getattr(self, "_grid_key", None) is None:   # to a box not seen)
+            x, y = self._snapped(x, y, group)     # (Alt held: move freely)
+        if off is None and getattr(self, "_snap_res", None) is not None:
             x, y = self._ease_snap(raw, (x, y))   # (a snap eases in and out: B8)
         clock = self.app.clock
-        clock.move(self.win, x, y)
+        clock.move(self.win, x + (off[0] if off else 0), y + (off[1] if off else 0))
         self._dropped = {self: (x, y)}              # where the drag put each (winfo_rootx can lag behind)
         for w, ox, oy in group:
             if w.win.winfo_exists():
@@ -2582,13 +3029,17 @@ class NoteWindow:
 
     def _place(self, nw, x, y, w=None, h=None):
         """Tell Windows only what changed (each change redraws that note), in the frame's one batch."""
+        nw._end_wide()                      # (Settings' bigger window: the pad's box again)
         box = (x, y, w, h)
         if self._geometries.get(nw) != box:
             self._geometries[nw] = box
             self.app.clock.move(nw.win, x, y, w, h)
 
     def _resize_start(self, event):
-        self._resize = (event.x_root, event.y_root, self.win.winfo_width(), self.win.winfo_height())
+        wide = self._wide
+        self._end_wide()
+        w, h = (self.pad.width, self.pad.height) if wide else (self.win.winfo_width(), self.win.winfo_height())
+        self._resize = (event.x_root, event.y_root, w, h)
         self._pointer = None
         self._resize_area = self.app.area_of(_pad_box(self.pad))
         self._geometries = {}
@@ -2602,6 +3053,8 @@ class NoteWindow:
         self._resize_box = _pad_box(self.pad)
         self._resize_group = [(w, _pad_box(w.pad)) for w in self.app.group_windows(self.pad.id, ids)
                               if w is not self]
+        for w in [self] + [w for w, _b in self._resize_group]:
+            w.end_covers()
         # the boxes at the start: what Undo goes back to, and what the one plan at the release is made from
         self._resize_before = self.app.layout_of([i for i, w in self.app.windows.items() if not w._closing])
         self._resize_shapes = self.app.space()
@@ -2750,6 +3203,8 @@ class NoteWindow:
 
     def _drag_end(self, _event=None):
         self._flush_gesture()               # (the last pointer, if its frame had not come yet)
+        wide_off = getattr(self, "_wide_off", None) if self._drag else None
+        self._wide_off = None
         dropped = getattr(self, "_dropped", None) if self._drag else None   # (off the screen: back in)
         if dropped:                         # the pads take where the drag put them now: the windows'
             for w, (x, y) in dropped.items():   # <Configure> may come later, and the links made at the
@@ -2828,7 +3283,7 @@ class NoteWindow:
                 for w in places:
                     w.pad.stacked = False
             ids = {w.pad.id for w in places} | ({CAL} if along is not None else set())   # (it came along)
-            throw = self._release_velocity() if was_drag else None
+            throw = self._release_velocity() if was_drag and wide_off is None else None
             self.app.settle_drop(ids, places=places, anchor=self, velocity=throw if throw and any(throw) else None)
         if resized and not plain_members and self.app.layout_of([w.pad.id for w in members]) != before:  # Undo (after any bring_back, an apply); the first time also how to avoid it
             prefs = self.app.prefs
@@ -2838,11 +3293,14 @@ class NoteWindow:
         if was_drag and snapped_to is not None and not tiles:   # M2: a snapped drop links to what it snapped to
             self.win.update_idletasks()     # (the pads take where the windows are)
             self.app.space_changed()
-            self.app.link_drop(moved_ids, snapped_to)
+            if self.app.link_drop(moved_ids, snapped_to):
+                self.show_tip("link")       # the first link ever: how to move one alone (U1)
         self.app.settle_links()             # (links that no longer touch break: Alt, a drag to somewhere else)
         self.app.request_save()
         if push is not None:
             self.app.motion.when_still(push)
+        if wide_off is not None:
+            self._settle_wide(wide_off)
 
     # ---- group resize: a picture stands in for the widgets ---------------------------
     def freeze(self):
@@ -2867,7 +3325,8 @@ class NoteWindow:
             return x, y, x + wd.winfo_width(), y + wd.winfo_height()
         rail = self.rail.winfo_width() if self.rail.winfo_ismapped() else 0
         row = box(self.bar)[3]
-        close = (box(self.btn_min)[0] if self.btn_min.winfo_ismapped()      # (- and x: the right-hand piece)
+        close = (box(self.btn_color)[0] if self.btn_color.winfo_ismapped()   # (the dot, - and x: the right-hand
+                 else box(self.btn_min)[0] if self.btn_min.winfo_ismapped()  # piece)
                  else box(self.btn_close)[0] if self.btn_close.winfo_ismapped() else fw)
         more = box(self.btn_more)[1] if rail else fh
         grip = box(self.grip) if self.grip.winfo_ismapped() else (fw, fh, fw, fh)
@@ -2905,6 +3364,7 @@ class NoteWindow:
         16 ran at 36 fps). The window keeps its size and a window region shows w x h of it; it
         grows only when it must, RING_SLACK px at a time. The pad says the box shown (a docked
         calendar follows it). thaw() makes the window that box again."""
+        self._end_wide()
         cover = self._cover
         if cover is None:
             self.app.clock.move(self.win, x, y, w, h)
@@ -2959,6 +3419,7 @@ class NoteWindow:
         a fold of a note that shows (not one built folded) first takes its picture, as it is
         painted, for the unfold to roll. ``geometry`` False: the window keeps its height (it is
         rolling there: the roll's end calls this again)."""
+        self.caret.follow_soon(jump=True)   # (folded: hidden; unfolded: back)
         p = self.pad
         if p.collapsed and shoot:
             try:
@@ -2970,7 +3431,6 @@ class NoteWindow:
             if painted:
                 self.app.shots.fresh(self)
         if p.collapsed:
-            self.hide_hints()
             self.hide_undo()
             self.list_view.hide_preview()
             self.views.pack_forget()
@@ -2992,11 +3452,13 @@ class NoteWindow:
     def toggle_collapse(self, instant=False):
         """Fold the note up to its top bar, or unfold it. The notes stacked under it (snapped)
         move up to close the gap, and back down when it unfolds. ``instant``: they jump
-        (folding many at once)."""
+        (folding many at once). The first fold ever: the strip says how to unfold (U1)."""
         p = self.pad
         if self._closing or self.win.state() != "normal":
             return
+        self._end_wide()
         if self.app.prefs.auto_layout and not p.free:    # the tiles close up / make room
+            self._fold_tip_for(not p.collapsed)
             p.collapsed = not p.collapsed
             self._apply_collapsed(shoot=True)
             self.app.request_save()
@@ -3005,6 +3467,7 @@ class NoteWindow:
         self.user_moved(moved=False)
         if self.rolling:
             return
+        self._fold_tip_for(not p.collapsed)
         if instant or not self.win.winfo_ismapped() or self.app.clock.mode != "full":   # (B9: no roll)
             self.app.set_folded([self], not p.collapsed)     # one plan: closes up linked / pushes (no Undo)
             self.app.request_save()
@@ -3012,6 +3475,23 @@ class NoteWindow:
             self._fold_rolling()
         else:
             self._unfold_rolling()
+
+    def _fold_tip_for(self, folding):
+        """The first fold ever: the strip says how to unfold, for TIP_MS (U1). Unfolding ends it."""
+        if not folding:
+            self._end_fold_tip()
+        elif self.app.tip_once("fold"):
+            self._fold_tip, self._fold_fit = True, None
+            self._later("fold_tip", TIP_MS, self._end_fold_tip)
+
+    def _end_fold_tip(self):
+        """The fold tip goes: the strip shows what the memo says again."""
+        job = self._jobs.pop("fold_tip", None)
+        if job is not None:
+            self.win.after_cancel(job)
+        if getattr(self, "_fold_tip", False):
+            self._fold_tip, self._fold_fit = False, None
+            self._draw_row()
 
     def _fold_rolling(self):
         """Fold up: the note rolls up to its top bar (ROLL_MS) while the plan runs (the notes
@@ -3076,7 +3556,7 @@ class NoteWindow:
         win, c = self.win, self.colors
         start = _mix(win, accent_color(win, self.app.theme_colors().bg, c.bg), c.bg, 0.15)
         plain = (self.bar, self.row)
-        buttons = (self.btn_back, self.btn_min, self.btn_close)
+        buttons = (self.btn_back, self.btn_min, self.btn_close, self.btn_color)
 
         last = [None]
 
@@ -3103,6 +3583,14 @@ class NoteWindow:
         self.app.space_changed()
         if self._clip is not None:              # a group resize shows it through a region: the pad
             return                              # is what clip_to says, not the window's real size
+        if self._wide:                          # Settings' bigger window: laid out, the pad kept
+            size = (self.win.winfo_width(), self.win.winfo_height())
+            if size == tuple(self._wide_box[2:]):
+                if size != getattr(self, "_wide_laid", None) and self.win.state() == "normal":
+                    self._wide_laid = size
+                    self._sized(*size)
+                return
+            self._wide, self._wide_laid = False, None    # sized by something else: the pad rules again
         if self.win.state() != "normal":
             return
         if self.app.screens_pending and not self.app.moving:
@@ -3132,10 +3620,10 @@ class NoteWindow:
             else:
                 self._sized(geo[2])
 
-    def _sized(self, width):
+    def _sized(self, width, height=None):
         """Its size changed (resized, or a glide got there): the date fits again, and the grab
         strip, picture and inline pictures are drawn for it."""
-        self._arrange_chrome(width)
+        self._arrange_chrome(width, height)
         if self.note.style == "image":
             self._later("image", 120, self.viewer.render)
         if self._inline:

@@ -244,6 +244,9 @@ class Updater:
             reply = json.loads(self._get(api_url(), HEADERS).decode("utf-8"))
             found = pick_release(reply, VERSION)
         except WebError as e:
+            if e.status == 404:                 # no published release yet (only pre-releases or drafts:
+                self._send(state="latest", release=None)    # /latest skips them): nothing newer, not
+                return                                       # an unreadable reply
             self._send(state="error", error=("upd_err_network" if e.status is None else
                                              "upd_err_rate" if e.status in (403, 429) else "upd_err_reply"))
         except ValueError:                      # (bad JSON, bad UTF-8, not a release)

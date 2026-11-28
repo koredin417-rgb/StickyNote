@@ -67,9 +67,9 @@ class NoteLookTest(unittest.TestCase):
         self.assertEqual(texts.date_row(date(2026, 11, 25), lang="en"), ("25", "Wed, Nov"))
 
     def test_more_menu_items(self):
-        menu = self.nw._more_menu()
-        self.assertEqual(menu.labels()[:4], [tr("menu_style"), tr("menu_trash"), tr("menu_settings"),
-                                             tr("menu_minimize")])
+        menu = self.nw._more_menu()             # Phase 9 (U2): the right-click menu, which has these too
+        for key in ("menu_style", "menu_trash", "menu_settings", "menu_minimize"):
+            self.assertIn(tr(key), menu.labels())
 
     def test_row_fold_and_menu(self):
         nw = self.nw
@@ -130,17 +130,25 @@ class NoteLookTest(unittest.TestCase):
         nw = self.nw
         self.size(nw, 320, 320)
         self.typing(nw)
-        self.assertEqual(nw.rail_shown(), (nw.btn_memo, nw.btn_window, nw.btn_list) + self.fmt(nw))
-        self.assertEqual(nw.rail_hidden(), (nw.btn_cal, nw.btn_pin))
+        # Phase 9 (Q3): the format buttons give way first (picture, then strike), the calendar last
+        self.assertEqual(nw.rail_hidden(), (nw.btn_strike, nw.btn_picture))
+        self.assertEqual(nw.rail_shown(), self.nav(nw) + (nw.btn_bold, nw.btn_italic, nw.btn_underline,
+                                                          nw.btn_bullets, nw.btn_todo))
         labels = nw._more_menu().labels()
-        self.assertEqual(labels[4:], [tr("menu_calendar"), tr("menu_on_top")])
+        # Phase 9 (U2): ⋯ is the right-click menu, then the rail's hidden buttons at the end
+        self.assertEqual(labels[-2:], [b.tooltip.text.split("\n")[0] for b in (nw.btn_strike, nw.btn_picture)])
+        PopupMenu.close_current()
+        top = len(nw._note_menu(0, 0).labels())
         PopupMenu.close_current()
         self.size(nw, MIN_W, MIN_H)
         self.typing(nw)
         every = set(self.nav(nw) + self.fmt(nw))
         self.assertEqual(set(nw.rail_shown()) | set(nw.rail_hidden()), every)
         self.assertIn(nw.btn_memo, nw.rail_shown())
-        self.assertEqual(len(nw._more_menu().labels()), 4 + len(nw.rail_hidden()))
+        top = len(nw._note_menu(0, 0).labels())
+        PopupMenu.close_current()
+        in_menu = (nw.btn_memo, nw.btn_window, nw.btn_list, nw.btn_cal, nw.btn_pin)   # (once: review fix)
+        self.assertEqual(len(nw._more_menu().labels()), top + len([b for b in nw.rail_hidden() if b not in in_menu]))
         last = nw.rail_shown()[-1]
         self.assertLessEqual(last.winfo_rooty() + last.winfo_height(), nw.btn_more.winfo_rooty())
 
@@ -162,7 +170,7 @@ class NoteLookTest(unittest.TestCase):
         self.assertTrue(nw.btn_back.winfo_ismapped())
         self.assertLess(nw.btn_back.winfo_rootx(), nw.row.winfo_rootx())
         self.assertEqual(nw.row_texts(), [tr("title_list")])
-        self.assertTrue(nw.btn_close.winfo_ismapped())
+        self.assertFalse(nw.btn_close.winfo_ismapped())     # Phase 9 (Q7): ← and Esc go back, no ×
         self.assertTrue(nw.rail.winfo_ismapped())
         nw.go_back()
         pump(self.app, timeout=0.2)
@@ -203,7 +211,8 @@ class NoteLookTest(unittest.TestCase):
         self.assertEqual(round(y1 - y0), h + px(40) - 2 * e)
         close = cover.find_withtag("close")
         self.assertTrue(close)
-        right = nw.btn_min.winfo_width() + nw.btn_close.winfo_width() + px(10)   # (- and x: one piece, at the right)
+        right = (nw.btn_color.winfo_width() + nw.btn_min.winfo_width() + nw.btn_close.winfo_width()   # (the colour
+                 + px(10))                                       # dot, - and x: one piece, at the right)
         self.assertGreaterEqual(cover.coords(close[0])[0], w + px(60) - 2 * e - right)
         nw.thaw()
         pump(self.app, timeout=0.1)

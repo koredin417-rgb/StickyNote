@@ -15,7 +15,6 @@ class VirtualListTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         for i in range(N):
             self.app.add_note(Note(header=f"메모 {i}", body=f"w{i:03d}x 본문 " * 6))
         self.nw.show_list()

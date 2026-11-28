@@ -14,12 +14,22 @@ winapi.set_dpi_aware()
 
 from app import App  # noqa: E402  (after DPI setup, like main.py)
 from geom import Screen  # noqa: E402
+from store import TIPS  # noqa: E402
 
 SCREEN = Screen(monitor=(0, 0, 1920, 1080), work=(0, 0, 1920, 1040))
 
 
-def make_app(folder: Path) -> App:
-    return App(folder, screens=[SCREEN])
+def make_app(folder: Path, tips: bool = False, rail: bool = False, tour: bool = False) -> App:
+    """``tips``: the one-time tips may show (else they count as shown: out of the way). ``rail``: the
+    calm rail as the app chose it (else it always shows, as tests not about it expect)."""
+    app = App(folder, screens=[SCREEN])
+    if not tips:
+        app.prefs.tips_seen = list(TIPS)
+    if not rail:
+        app.prefs.rail_hide = False
+    if not tour:                                # (the first start's tour: only where a test asks)
+        app.prefs.tour_done = True
+    return app
 
 
 def pump(app: App, until: Callable[[], bool] = lambda: False, timeout: float = 2.0) -> bool:

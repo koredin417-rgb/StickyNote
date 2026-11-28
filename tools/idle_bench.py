@@ -49,7 +49,6 @@ def main():
             time.sleep(0.005)
     pump(1.5)
     last = next(iter(app.windows.values()))
-    last.close_hints()
     for _ in range(4):
         last = app.new_window(from_window=last)
         pump(0.6)

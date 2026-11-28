@@ -171,7 +171,7 @@ class ImageViewer:
         w, h = self._area()[0], px(56)
         self.canvas.configure(width=w, height=h, cursor="hand2" if clickable else "")
         if not icon or not self.app.icons.available:
-            self.canvas.create_text(w / 2, h / 2, text=text, fill=c.muted, tags="hint", font=(UI_FONT, 9))
+            self.canvas.create_text(w / 2, h / 2, text=text, fill=c.muted_text, tags="hint", font=(UI_FONT, 9))
             return
         font = tkfont.Font(self.canvas, family=UI_FONT, size=8)
         box, gap = px(20), px(10)
@@ -182,7 +182,7 @@ class ImageViewer:
         kx = x + box + gap
         self.canvas.create_polygon(_round_rect(kx, h / 2 - kh / 2, kx + kw, h / 2 + kh / 2, px(4)), smooth=True,
                                    fill=c.bg, outline=c.border, tags="hint")
-        self.canvas.create_text(kx + kw / 2, h / 2, text=key, fill=c.muted, font=font, tags="hint")
+        self.canvas.create_text(kx + kw / 2, h / 2, text=key, fill=c.muted_text, font=font, tags="hint")
 
     def _draw_picture(self, fade_from=None):
         if self._source is None:            # (gone meanwhile: reset, release)

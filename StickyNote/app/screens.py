@@ -170,6 +170,8 @@ class ScreensMixin:
         """N5: the monitors are another setup. A known ``new`` loads each note's and the calendar's
         copy; an unknown one copies ``old``, moving in what is off the screens (a group as one
         shape). Then every note returns (return_note "screens"). ``start``: only loads."""
+        for w in list(self.windows.values()):       # (Settings' bigger window: the pad's box again)
+            w._end_wide()
         pads = self._every_pad()
         known = self._switch_copies(pads, old, new, start)
         if start:

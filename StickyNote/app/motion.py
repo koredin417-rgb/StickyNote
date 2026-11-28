@@ -28,7 +28,7 @@ from ui_common import TIP_KEY, _alpha, accent_color, animating, stop_animation
 # A click-through window keeps -alpha below 1.0 while it is click-through, so Tk layers it
 # itself (see winapi.set_click_through). 0.999 looks fully opaque.
 CLICK_THROUGH_ALPHA = 0.999
-CROSSFADE_MS = 60               # Animations: Reduced: a moving window fades out this fast, jumps, fades back
+CROSSFADE_MS = anim.BASE // 2   # Animations: Reduced: a moving window fades out this fast, jumps, fades back (was a 4-frame blink)
 
 
 def _size(b):
@@ -162,6 +162,15 @@ class Motion:
         plan = {}
         opening = self._opening()
         for pid, b in targets.items():
+            if pid != CAL:                      # Settings' bigger window: the pad's box again first
+                nw = self._note(pid)
+                if nw is not None and nw._wide:
+                    if tuple(int(round(v)) for v in b) == tuple(pad_box(nw.pad)):
+                        continue                # it stays (its calendar grew, say): Settings stays as big
+                    nw._end_wide()              # (the user: expanding the calendar shrank Settings)
+                    nw._later("widen", 40, nw._widen_when_still)    # moved: big again once it is still
+                if nw is not None and tuple(int(round(v)) for v in b) != tuple(pad_box(nw.pad)):
+                    nw.end_covers()             # it moves: a slide's picture would stay where it was
             here = self._here(pid)
             if pid == CAL and opening is not None:      # still withdrawn: its plan's box, no frames (reveal() shows it)
                 opening.target_box = tuple(int(round(v)) for v in b)

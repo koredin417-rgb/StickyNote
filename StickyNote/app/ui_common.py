@@ -41,6 +41,10 @@ GLYPH = {
     "search": "", "prev": "", "next": "",
 }
 GLYPH["trash"] = ""                 # Delete (bin)
+GLYPH["on_top"] = ""         # keep on top: Windows' own icon (Calculator); the pin is the list's (Q4)
+GLYPH["select"] = "\ue762"         # the memo list's select mode (backlog 4)
+GLYPH["folder"] = "\ue8b7"         # Open folder (a failed save; Settings, memo folder)
+GLYPH.update(copy="\ue8c8", select_all="\ue8b3")     # the memo text's menu (U2)
 GLYPH.update(bold="\ue8dd", italic="\ue8db", underline="\ue8dc", strike="\uede0",
              bullets="\ue8fd", todo="\ue73a", picture="\ueb9f")       # the format bar under the memo
 GLYPH.update(undo="\ue72c", remove="\ue711", more="\ue712")     # more: the rail's \u22ef
@@ -53,9 +57,14 @@ GLYPH.update(undo_action="\ue7a7", restore="\ue777", open_window="\ue8a7", unpin
      # on a to-do line under the mouse (undo: drawn mirrored)
 ICON_FONTS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
 ICON_FONT_FILES = {"Segoe Fluent Icons": "SegoeIcons.ttf", "Segoe MDL2 Assets": "segmdl2.ttf"}
-ICON_BOX = 14                    # every bar icon is drawn this big (px at 100 %), centred in its button
+# icons C (2026-11-28): one size scale — rail 16, bars and rows 14, the list 12, the small arrows 12
+RAIL_ICON_BOX = 16               # the rail's buttons (px at 100 %), centred in their button
+ICON_BOX = 14                    # every other bar icon (the top bar, the bottom bar, Settings rows)
 SMALL_ICON_BOX = 12              # icons inside the list
-SECTION_ICON_BOX = 9             # ▾ / ▸ and the sort icon beside the list's small part heads (8 pt text)
+SECTION_ICON_BOX = 12            # ▾ / ▸ and the sort icon beside the list's part heads, Settings' ›
+CHIP_PAD = 3                     # a button that is on: its icon on a rounded chip this much bigger a side
+FORMAT_CONFIRM_MS = anim.BASE    # phase 10 I: a button's chip grows in (or out) once; the text's tint
+                                 # fades over twice this
 BIN_ICON_BOX = 18                # the bin's icon under the memo list (px at 100 %)
 OPTICAL_SCALE = {GLYPH["minimize"]: 0.8, GLYPH["close"]: 0.8}   # they fill the box corners: draw smaller
 UI_FONT = texts.UI_FONTS[texts.DEFAULT]    # changes with the language (Korean: Malgun Gothic)
@@ -69,6 +78,9 @@ PALETTE = (
 )
 
 MIN_W, MIN_H = 260, 170
+SETTINGS_MIN_W, SETTINGS_MIN_H = 320, 420     # Settings opens at least this big (the window only: D)
+SETTINGS_KEEP_MS = 60_000       # a note's Settings page is kept this long after it is left (back again: at
+                                # once), then freed: some 2-3 MB of widgets a note, made again when opened
 SAVE_DELAY_MS = 400
 SAVE_SOON_MS = 1000              # save_soon: once the motion an action started is over, at most this late
 SIGNAL_POLL_MS = 10_000          # the signal files (an older launcher or installer): the port is the way now
@@ -76,8 +88,14 @@ DAY_CHECK_MS = 30_000            # (unused: the day is checked at midnight and o
 DOUBLE_CLICK_MS = 260
 BIN_DAYS = 7                     # memos stay in the bin this long, then are deleted for good (Settings)
 UNDO_MS = 8000                   # how long the "Moved to the bin · Undo" bar stays
+SAVE_FAILS_NOTICE = 2            # saves failed in a row before every note says so (Q8)
+SAVED_DOT = 6                    # phase 10 K: the dot by the date after a save (px at 100 %) ...
+SAVED_DOT_MS = 3 * anim.LONG     # ... fading in and out over this ...
+SAVED_DOT_PAUSE_MS = 1200        # ... once the memo was saved and no key came for this long
+BACKUP_NOTICE_MS = 300           # memos loaded from the backup: the notice after start (Q8)
 CONFIRM_MS = 3000                # "click again to delete" waits this long for the second click
 NOTICE_MS = 3500                 # a short notice in the bottom bar
+TIP_MS = 10000                   # a one-time tip stays this long (or until its ×)
 PREVIEW_DELAY_MS = 250           # resting on a memo card this long shows the whole memo
 PREVIEW_HIDE_MS = 300            # after leaving the card (time to move onto the preview)
 TEXT_MIN_LINES = 3               # on a small image memo the picture shrinks so the text keeps this many lines
@@ -135,13 +153,12 @@ PAGE_DEPTH = {"home": 0, "list": 1, "settings": 1, "bin": 2}   # deeper (or leve
 CAL_HEAD_BUTTON_W = 20           # the calendar head's buttons (px at 100 %): six of them fill what five of 24 did
 CAL_HOVER_IN_MS, CAL_HOVER_OUT_MS = anim.FAST, anim.BASE   # a day under the mouse fades in, the one left out ...
 CAL_HOVER_STEPS = 5              # ... through this many colours (a fixed ramp: no new picture per frame)
+HEAD_INK_STEPS = 6               # the month head's "this month" icon fades through this many steps
 MONTH_SLIDE_MS = anim.LONG       # paging months: the shown one slides out as the next slides in
 VIEW_DIP_MS = anim.FAST          # big <-> mini by the user's click: the calendar dips out this fast, then fades back
 DELETE_FLY_MS = anim.LONG        # a deleted memo's picture flies into the bin icon
 TOAST_RISE_MS = anim.BASE        # the Undo / notice bar rises into place ...
 TOAST_RISE = 10                  # ... from this far below (px at 100 %)
-HINT_DROP_MS = anim.BASE         # the first-start tips drop into place ...
-HINT_DROP = 8                    # ... from this far above (px at 100 %)
 PICTURE_FADE_MS = anim.BASE      # the next picture (tab) fades over the last one
 CHIP_SETTLE_MS = anim.FAST       # a dropped memo title slides into its new day
 DONE_FADE_MS = anim.BASE         # a ticked to-do shows dark, then fades to its done color
@@ -456,6 +473,7 @@ class Colors:
         self.dark = luminance(widget, self.fg) > 0.5      # light text: a dark page
         text = TEXT_CONTRAST if contrast(widget, self.fg, bg) >= TINT_BELOW else MARK_CONTRAST
         self.muted = _at_least(widget, bg, self.fg, 0.55, MARK_CONTRAST)
+        self.muted_text = readable(widget, self.muted, bg, TEXT_CONTRAST)    # grey words (Q9); icons keep muted
         self.hover = _at_least(widget, bg, self.fg, 0.10, 1.15)
         self.border = _at_least(widget, bg, self.fg, 0.25, 1.4)
         self.select = _at_least(widget, bg, self.fg, 0.22, 1.5)
@@ -528,6 +546,10 @@ class GroupRing:
         self.top.attributes("-alpha", 0.0)
         self.top.deiconify()
         self.top.attributes("-topmost", True)
+        try:                                # mapped now: its frame window (what a frame's batch moves)
+            self.top.update_idletasks()     # exists before the first drag frame, not one frame late
+        except tk.TclError:
+            pass
         fade(self.top, "show", 0.0, alpha, MENU_FADE_MS)
 
     def move(self, boxes, now=False):
@@ -624,7 +646,7 @@ class Tooltip:
                                font=ui_font(10, len(lines) > 1))
         y = cv.bbox(title)[3] + px(3)
         if len(lines) > 1:
-            cv.create_text(padx, y, anchor="nw", text="\n".join(lines[1:]), fill=c.muted, width=wrap,
+            cv.create_text(padx, y, anchor="nw", text="\n".join(lines[1:]), fill=c.muted_text, width=wrap,
                            font=(UI_FONT, 9))
         x0, y0, x1, y1 = cv.bbox("all")
         width, height = x1 + padx, y1 + pady
@@ -652,12 +674,26 @@ class Tooltip:
             except tk.TclError:
                 pass
             self.job = None
-        if self.tip is not None:
+        tip, self.tip = self.tip, None
+        if tip is not None:                 # it fades out (exit_ms: quicker than it came, easing in),
+            tip.photo, self._photo = self._photo, None      # then goes, its card's picture with it
+            gone = getattr(_event, "type", None) in (tk.EventType.Destroy, "17")
             try:
-                self.tip.destroy()
+                if gone or not tip.winfo_exists():
+                    tip.destroy()
+                else:
+                    def write(v, tip=tip):
+                        if tip.winfo_exists():
+                            tip.attributes("-alpha", v)
+
+                    def done(tip=tip):
+                        if tip.winfo_exists():
+                            tip.destroy()
+                    anim.clock_of(tip).tween(tip, "alpha", 0.0, anim.exit_ms(TIP_FADE_MS), read=lambda: _alpha(tip),
+                                             write=write, ease=anim.ease_in, done=done)
             except tk.TclError:
                 pass
-            self.tip = None
+        self._photo = None
 
 
 def _icon_font_file(family):
@@ -735,6 +771,102 @@ class IconPainter:
             rgba.putalpha(mask)
             self._photos[key] = ImageTk.PhotoImage(rgba, master=self.root)
         return self._photos[key]
+
+
+def chip_photo(app, glyph, fg, chip, box, pad=CHIP_PAD):
+    """``glyph`` in ``fg`` on a small rounded chip of ``chip`` (icons C: a button or a menu item that
+    is on), ``box`` + 2 ``pad`` px a side. Cached like every icon (by glyph, colours and size), so a
+    switch on or off draws nothing new. None without the icon font."""
+    if not app.icons.available:
+        return None
+    b, p = app.px(box), app.px(pad)
+    key = ("chip", glyph, fg, chip, b, p)
+    photo = app.icons._photos.get(key)
+    if photo is None:
+        size, s = b + 2 * p, 8                  # (the corners drawn 8x and shrunk: smooth)
+        corner = Image.new("L", (size * s, size * s), 0)
+        ImageDraw.Draw(corner).rounded_rectangle((0, 0, size * s - 1, size * s - 1),
+                                                 radius=round(size * s * 0.27), fill=255)
+        img = Image.new("RGBA", (size, size), ImageColor.getrgb(chip)[:3] + (0,))
+        img.putalpha(corner.reduce(s))
+        ink = Image.new("RGBA", (size, size), ImageColor.getrgb(fg)[:3] + (0,))
+        alpha = Image.new("L", (size, size), 0)
+        alpha.paste(app.icons.mask(glyph, b), (p, p))
+        ink.putalpha(alpha)
+        photo = app.icons._photos[key] = ImageTk.PhotoImage(Image.alpha_composite(img, ink),
+                                                            master=app.icons.root)
+    return photo
+
+
+def thumb_caps(app, w, fill, bg):
+    """The scroll thumb's round ends, ``w`` px across in ``fill`` on ``bg``: (top, bottom) pictures
+    of a circle drawn 8x and shrunk (smooth, not Tk's jagged round line cap); the straight part
+    between them is a plain rectangle. Cached by width and colours."""
+    key = ("thumb", w, fill, bg)
+    caps = app.icons._photos.get(key)
+    if caps is None:
+        s = 8
+        mask = Image.new("L", (w * s, w * s), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, w * s - 1, w * s - 1), fill=255)
+        img = Image.new("RGB", (w, w), bg)
+        img.paste(Image.new("RGB", (w, w), fill), (0, 0), mask.reduce(s))
+        half = w // 2
+        caps = app.icons._photos[key] = (ImageTk.PhotoImage(img.crop((0, 0, w, half)), master=app.icons.root),
+                                         ImageTk.PhotoImage(img.crop((0, half, w, w)), master=app.icons.root))
+    return caps
+
+
+def dot_photo(app, fill, ring, size, ring_w=1, check=None):
+    """A smooth round swatch ``size`` px (drawn 8x and shrunk: no jagged edge), ringed ``ring_w`` px
+    in ``ring``; ``check``: a tick in that colour on it. Cached by its colours and size."""
+    key = ("dot", fill, ring, size, ring_w, check)
+    photo = app.icons._photos.get(key)
+    if photo is None:
+        s, big = 8, size * 8
+        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        rw = max(1, ring_w) * s
+        d.ellipse((0, 0, big - 1, big - 1), fill=ImageColor.getrgb(ring))
+        d.ellipse((rw, rw, big - 1 - rw, big - 1 - rw), fill=ImageColor.getrgb(fill))
+        img = img.resize((size, size), Image.LANCZOS)
+        if check and app.icons.available:
+            box = max(6, round(size * 0.62))
+            ink = Image.new("RGBA", (box, box), ImageColor.getrgb(check)[:3] + (0,))
+            ink.putalpha(app.icons.mask(GLYPH["check"], box))
+            img.alpha_composite(ink, ((size - box) // 2, (size - box) // 2))
+        photo = app.icons._photos[key] = ImageTk.PhotoImage(img, master=app.icons.root)
+    return photo
+
+
+def switch_photo(app, on, track, knob, w=28, h=16, outline=None):
+    """An on/off switch (Settings C): a round-ended ``track`` with a round ``knob`` at its right end
+    (on) or left (off), ``w`` x ``h`` px at 100 %. Smooth, and cached like the icons."""
+    W, H = app.px(w), app.px(h)
+    key = ("switch", bool(on), track, knob, outline, W, H)
+    photo = app.icons._photos.get(key)
+    if photo is None:
+        s = 8
+        shape = Image.new("L", (W * s, H * s), 0)
+        ImageDraw.Draw(shape).rounded_rectangle((0, 0, W * s - 1, H * s - 1), radius=H * s // 2, fill=255)
+        img = Image.new("RGBA", (W, H), ImageColor.getrgb(outline or track)[:3] + (0,))
+        img.putalpha(shape.reduce(s))
+        if outline:                         # a 1 px ring of ``outline`` round the track
+            b = app.px(1) * s
+            inner = Image.new("L", (W * s, H * s), 0)
+            ImageDraw.Draw(inner).rounded_rectangle((b, b, W * s - 1 - b, H * s - 1 - b),
+                                                    radius=H * s // 2 - b, fill=255)
+            fill = Image.new("RGBA", (W, H), ImageColor.getrgb(track)[:3] + (0,))
+            fill.putalpha(inner.reduce(s))
+            img = Image.alpha_composite(img, fill)
+        r, m = (H * s) // 2 - app.px(2) * s, app.px(2) * s
+        cx = W * s - m - r if on else m + r
+        dot = Image.new("L", (W * s, H * s), 0)
+        ImageDraw.Draw(dot).ellipse((cx - r, H * s // 2 - r, cx + r, H * s // 2 + r), fill=255)
+        top = Image.new("RGBA", (W, H), ImageColor.getrgb(knob)[:3] + (0,))
+        top.putalpha(dot.reduce(s))
+        photo = app.icons._photos[key] = ImageTk.PhotoImage(Image.alpha_composite(img, top),
+                                                            master=app.icons.root)
+    return photo
 
 
 def bin_photo(app, color, dot=None, box=BIN_ICON_BOX):
@@ -819,7 +951,7 @@ def empty_page(app, parent, c, glyph, text):
     pic = tk.Label(box, bg=c.bg, bd=0)
     pic.pack()
     paint_glyph(app, pic, glyph, _mix(parent, c.muted, c.bg, 0.35), box=24)
-    tk.Label(box, text=text, bg=c.bg, fg=c.muted, font=(UI_FONT, 9)).pack(pady=(px(6), 0))
+    tk.Label(box, text=text, bg=c.bg, fg=c.muted_text, font=(UI_FONT, 9)).pack(pady=(px(6), 0))
     return box
 
 
@@ -840,26 +972,52 @@ class IconButton(tk.Canvas):
         self.app, self.glyph, self.overlay, self.box = app, glyph, overlay, box
         self._command = command
         self._bg = self._hover = self._on_bg = self._on_hover = "#FFFFFF"
-        self._fg = self.ink_color = "#000000"
+        self._fg = self.ink_color = self._on_fg = "#000000"
         self._x0 = self._y0 = 0
         self.photo = None
-        self.active = False             # format buttons: shaded while their format is on
+        self.active = False             # on (a format, the calendar, keep on top): its icon on a chip
+        self._pulse_pad = None          # (phase 10 I: the chip's size while it pulses)
         self.tooltip = Tooltip(self, tip)
-        self.bind("<Enter>", lambda e: self.configure(bg=self._on_hover if self.active else self._hover), add="+")
-        self.bind("<Leave>", lambda e: self.configure(bg=self._rest()), add="+")
+        self._hovered = False
+        self.bind("<Enter>", lambda e: self._hover_to(True), add="+")
+        self.bind("<Leave>", lambda e: self._hover_to(False), add="+")
         self.bind("<ButtonRelease-1>", self._release)
 
     def _rest(self):
-        return self._on_bg if self.active else self._bg
+        return self._bg
+
+    def _hover_to(self, on):
+        self._hovered = on
+        self.configure(bg=self._hover if on else self._rest())
+        if self.active:                     # the chip a step stronger, so it shows on the hover too
+            self._draw()
 
     def set_active(self, on):
         if bool(on) != self.active:
             self.active = bool(on)
-            self.configure(bg=self._rest())
+            self._draw()
 
     def _release(self, event):
         if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
             self._command()
+
+    def pulse(self):
+        """Phase 10 I: switched on (or off), the chip grows in (or shrinks out) once: three cached
+        chip sizes, one redraw each."""
+        if not self.app.icons.available:
+            return
+        steps = (1, 2, CHIP_PAD) if self.active else (CHIP_PAD, 2, 1)
+
+        def step(k):
+            pad = steps[min(len(steps) - 1, int(k * len(steps)))]
+            if pad != self._pulse_pad:
+                self._pulse_pad = pad
+                self._draw()
+
+        def done():
+            self._pulse_pad = None
+            self._draw()
+        animate(self, "pulse", FORMAT_CONFIRM_MS, step, done, kind="fade")
 
     def set_glyph(self, glyph):
         self.glyph = glyph
@@ -870,6 +1028,14 @@ class IconButton(tk.Canvas):
         w, h = int(self.cget("width")), int(self.cget("height"))
         box = self.app.px(self.box)
         self._x0, self._y0 = (w - box) // 2, (h - box) // 2
+        pulse = self._pulse_pad
+        if (self.active or pulse is not None) and self.app.icons.available:     # on: the icon on its chip
+            unit = CHIP_PAD if pulse is None else pulse
+            pad = self.app.px(unit)
+            chip = self._on_hover if self._hovered else self._on_bg
+            self.photo = chip_photo(self.app, self.glyph, self._on_fg, chip, self.box, unit)
+            self.create_image(self._x0 - pad, self._y0 - pad, anchor="nw", image=self.photo)
+            return
         if self.app.icons.available:
             self.photo = self.app.icons.photo(self.glyph, self._fg, box, badge=self.overlay is not None)
             self.create_image(self._x0, self._y0, anchor="nw", image=self.photo)
@@ -896,6 +1062,7 @@ class IconButton(tk.Canvas):
         self._bg, self._hover = colors.bg, colors.hover
         self._on_bg, self._on_hover = colors.active, colors.select
         self._fg = self.ink_color = colors.fg if strong else colors.muted
+        self._on_fg = colors.fg
         self.configure(bg=self._rest())
         self._draw()
 
@@ -922,6 +1089,36 @@ def _today_mask(size):
     cx, cy, r = left + 112, top + 145, 29                    # the dot: today
     d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
     return img
+
+
+class ColorDot(tk.Canvas):
+    """Phase 11: the memo's colour as a small round dot on the top bar (ringed so it shows on its
+    own colour); a click opens the palette (``command``)."""
+
+    def __init__(self, master, app, command, tip, width=30, height=30):
+        super().__init__(master, width=app.px(width), height=app.px(height), bd=0, highlightthickness=0,
+                         cursor="hand2")
+        self.app, self.command = app, command
+        self.color, self._bg, self._hover, self._ring = "#FFFFFF", "#FFFFFF", "#EEEEEE", "#888888"
+        self.tooltip = Tooltip(self, tip)
+        self.bind("<Enter>", lambda e: self.configure(bg=self._hover), add="+")
+        self.bind("<Leave>", lambda e: self.configure(bg=self._bg), add="+")
+        self.bind("<ButtonRelease-1>", lambda e: self.command())
+
+    def _rest(self):
+        return self._bg
+
+    def set(self, color, colors):
+        self.color = str(color).upper()
+        self._bg, self._hover = colors.bg, colors.hover
+        self._ring = readable(self, Colors.of(self, self.color, solid=True).border, colors.bg, MARK_CONTRAST)
+        self.configure(bg=self._bg)
+        self.delete("all")
+        w, h, d = int(self.cget("width")), int(self.cget("height")), self.app.px(12)
+        x0, y0 = (w - d) // 2, (h - d) // 2
+        fill = readable(self, self.color, colors.bg, 1.35)     # (its own colour, a step deeper: it shows on itself)
+        self._photo = dot_photo(self.app, fill, self._ring, d, self.app.px(1))     # (smooth, no jagged oval)
+        self.create_image(w // 2, h // 2, image=self._photo)
 
 
 class FlatButton(tk.Label):
@@ -1190,6 +1387,11 @@ class FontPicker(tk.Frame):
 SCROLL_W = 5                     # the scroll thumb shown while scrolling (px at 100 %) ...
 SCROLL_W_HOVER = 8               # ... under the mouse or dragged
 SCROLL_MIN = 24                  # ... never shorter than this
+RAIL_REST_MS = 600               # phase 11: the rail hides this long after the note has no focus, no pointer
+RAIL_FADE_MS = 160               # ... the last picture fades off the live note this fast
+SCROLL_EDGE = 12                 # phase 10: the pointer this near the right edge shows the thumb
+SCROLL_SMOOTH_MS = anim.FAST     # ... a wheel notch glides this long; the thumb widens this fast
+SCROLL_BOUNCE = 12               # ... a page at its end gives this much and comes back (px at 100 %)
 SCROLL_HIDE_MS = 900             # it fades out this long after the view last moved ...
 SCROLL_FADE_MS = anim.LONG       # ... taking this long
 
@@ -1211,6 +1413,10 @@ class OverlayScroll:
         self._k = 1.0                       # 1 = solid, 0 = faded into the page
         self._drag = None
         self._job = None
+        self._wk = 0.0                      # 0: SCROLL_W, 1: SCROLL_W_HOVER (eased between)
+        self.on_scroll = None               # called when the view moves (the note's caret follows it)
+        self.wheel_to = None                # the wheel over the thumb goes here (a smooth scroll)
+        target.winfo_toplevel().bind("<Motion>", self._near, add="+")
         target.configure(yscrollcommand=self._set)
         cv = self.cv
         cv.bind("<Configure>", lambda e: self._draw())
@@ -1238,6 +1444,8 @@ class OverlayScroll:
             return
         if self._view[0] != old[0]:         # the view moved (not just more text laid out)
             self.flash()
+            if self.on_scroll is not None:
+                self.on_scroll()
         elif self._shown:
             self._draw()
 
@@ -1285,7 +1493,7 @@ class OverlayScroll:
         free = max(0.0, track - length)
         span = max(1e-6, 1.0 - (last - first))
         y0 = pad + free * min(1.0, first / span)
-        w = px(SCROLL_W_HOVER if (self._hover or self._drag is not None) else SCROLL_W)
+        w = px(SCROLL_W) + (px(SCROLL_W_HOVER) - px(SCROLL_W)) * self._wk
         x = self.width - px(2) - w / 2
         return x, y0 + w / 2, y0 + length - w / 2, w, track, length
 
@@ -1295,15 +1503,47 @@ class OverlayScroll:
         if not self._shown:
             return
         x, y0, y1, w, _track, _len = self._geometry()
-        color = _mix(cv, self.bg, self.thumb, self._k)
-        cv.create_line(x, y0, x, max(y0, y1), width=w, capstyle="round", fill=color)
+        color = _mix(cv, self.bg, self.thumb, round(self._k * 16) / 16)    # (16 shades: a small cache)
+        w = max(2, round(w))                # a pill: two smooth round ends and a straight part
+        left, top = round(x - w / 2), round(y0 - w / 2)
+        bottom = max(top + w, round(max(y0, y1) + w / 2))
+        cap_top, cap_bottom = thumb_caps(self.app, w, color, self.bg)
+        half = w // 2
+        cv.create_image(left, top, anchor="nw", image=cap_top)
+        if bottom - (w - half) > top + half:
+            cv.create_rectangle(left, top + half, left + w, bottom - (w - half), fill=color, outline="", width=0)
+        cv.create_image(left, bottom - (w - half), anchor="nw", image=cap_bottom)
 
     def _set_hover(self, on):
         self._hover = on
         if on:
             self.flash()
-        else:
+        self._ease_width()
+
+    def _ease_width(self):
+        """Wider under the mouse or while dragged, thin again after: eased (phase 10), no jump."""
+        to = 1.0 if (self._hover or self._drag is not None) else 0.0
+        start = self._wk
+        if start == to:
+            return
+
+        def step(k):
+            self._wk = start + (to - start) * k
             self._draw()
+        animate(self.cv, "width", SCROLL_SMOOTH_MS, step, kind="fade")
+
+    def _near(self, e):
+        """The pointer near the right edge of a view that scrolls shows the thumb (phase 10)."""
+        if self._shown or not self._overflows():
+            return
+        t = self.target
+        try:
+            x, y = e.x_root - t.winfo_rootx(), e.y_root - t.winfo_rooty()
+            w = t.winfo_width()
+            if w - self.app.px(SCROLL_EDGE) <= x < w and 0 <= y < t.winfo_height() and t.winfo_ismapped():
+                self.flash()
+        except tk.TclError:
+            pass
 
     def _press(self, e):
         _x, y0, y1, w, track, length = self._geometry()
@@ -1312,6 +1552,7 @@ class OverlayScroll:
             self.target.yview_moveto(max(0.0, first))
         self._drag = (e.y, self._view[0], track)
         self.flash()
+        self._ease_width()
 
     def _motion(self, e):
         if self._drag is None:
@@ -1326,30 +1567,76 @@ class OverlayScroll:
     def _release(self, _e):
         self._drag = None
         self.flash()
+        self._ease_width()
 
     def _wheel(self, e):
+        if self.wheel_to is not None:
+            self.wheel_to(e)
+            return "break"
         steps = -1 if e.delta > 0 else 1
         self.target.yview_scroll(steps * self.units, "units")
         return "break"
+
+
+class WheelGlide:
+    """A wheel's glide (SCROLL_SMOOTH_MS, a "move": Reduced and Off jump). A notch moves where it
+    is going; a glide already going turns toward that keeping its speed (the clock's tween), so fast
+    wheeling flows instead of kicking at each notch. ``scroll(n)`` moves the view n px (relative:
+    a row measured meanwhile keeps its correction)."""
+
+    def __init__(self, widget, scroll):
+        self.widget, self.scroll = widget, scroll
+        self.applied, self.target = 0, 0.0
+
+    def active(self) -> bool:
+        return animating(self.widget, "smooth")
+
+    def left(self) -> float:
+        """Px still to go (0 when it is not gliding)."""
+        return self.target - self.applied if self.active() else 0
+
+    def add(self, px) -> None:
+        if not self.active():
+            self.applied, self.target = 0, 0.0
+        self.target += px
+        try:
+            anim.clock_of(self.widget).tween(self.widget, "smooth", self.target, SCROLL_SMOOTH_MS,
+                                             read=lambda: float(self.applied), write=self._write, kind="move")
+        except tk.TclError:
+            pass
+
+    def _write(self, v) -> None:
+        want = round(v)
+        if want != self.applied:
+            n, self.applied = want - self.applied, want
+            try:
+                self.scroll(n)
+            except tk.TclError:
+                pass
+
+    def stop(self) -> None:
+        stop_animation(self.widget, "smooth")
+        self.applied, self.target = 0, 0.0
 
 
 class ScrollArea:
     """A vertically scrolling frame (mouse wheel; a thin theme-colored thumb while it moves)."""
 
     def __init__(self, master, app):
-        self.canvas = tk.Canvas(master, bd=0, highlightthickness=0, yscrollincrement=app.px(24))
+        self.canvas = tk.Canvas(master, bd=0, highlightthickness=0, yscrollincrement=1)   # (to the pixel: it glides)
         self.inner = tk.Frame(self.canvas, bd=0)
         self._item = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
-        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=(0, 0, e.width, e.height)))   # (its own size: a bounce moving it never shifts the view)
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._item, width=e.width))
         self.scroll = OverlayScroll(self.canvas, app)
         self._listeners: list = []
-        self.step = 1                       # units a wheel notch scrolls (see fine_steps)
+        self.step = app.px(24)              # px a wheel notch scrolls (see fine_steps)
+        self._glide = WheelGlide(self.canvas, lambda n: self.canvas.yview_scroll(n, "units"))
+        self.scroll.wheel_to = self.wheel
 
     def fine_steps(self, notch):
         """Scroll to the pixel (the view can be put anywhere), ``notch`` px a wheel notch."""
-        self.canvas.configure(yscrollincrement=1)
-        self.step = self.scroll.units = notch       # (the wheel over the thumb as over the list)
+        self.step = notch
 
     def listen(self, fn):
         """``fn()`` after every change of the view (scrolled, resized, a new scroll room)."""
@@ -1363,14 +1650,40 @@ class ScrollArea:
             fn()
 
     def wheel(self, event):
-        if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            self.canvas.yview_scroll((-1 if event.delta > 0 else 1) * self.step, "units")
+        """A notch glides SCROLL_SMOOTH_MS (a "move": Reduced and Off jump); one more meanwhile goes
+        on from where the glide was going. At an end, the page gives a little and comes back."""
+        c = self.canvas
+        first, last = c.yview()
+        if first <= 0.0 and last >= 1.0:
+            return
+        sign = -1 if event.delta > 0 else 1
+        if self._glide.left() == 0 and ((first <= 0.0 and sign < 0) or (last >= 1.0 and sign > 0)):
+            self._bounce(sign)
+            return
+        self._glide.add(sign * self.step)
+
+    def stop_glide(self):
+        """A jump by code (to the top, to a row): a glide still going would undo it."""
+        self._glide.stop()
+
+    def _bounce(self, sign):
+        """The page eases SCROLL_BOUNCE px past its end and back (a "move": none when Reduced)."""
+        if animating(self.canvas, "bounce"):
+            return
+        c, item, depth = self.canvas, self._item, -sign * self.scroll.app.px(SCROLL_BOUNCE)
+
+        def step(k):
+            c.coords(item, 0, round(depth * math.sin(math.pi * k)))
+        animate(c, "bounce", 2 * SCROLL_SMOOTH_MS, step, lambda: c.coords(item, 0, 0), ease=lambda t: t,
+                kind="move")
 
     def to_top(self):
+        self.stop_glide()
         self.canvas.yview_moveto(0)
 
     def show(self, widget):
         """Scroll just enough that ``widget`` (inside the area) is fully seen."""
+        self.stop_glide()
         self.canvas.update_idletasks()
         total = max(1, self.inner.winfo_height())
         view = self.canvas.winfo_height()
@@ -1507,6 +1820,8 @@ class PopupMenu:
         self.app, self.owner, self.colors = app, owner, app.theme_colors()
         self.items: list = []           # (label, command, checked, danger, icon, key) or None for a line
         self.rows: list = []            # (row frame, text label, item)
+        self.swatch_cells: list = []    # (colour, its canvas): the swatch row at the top (phase 11)
+        self._swatch = None             # (colours, the one in use, command(colour))
         self.top = self.body = None
         self._active = None
         self._had_focus = False
@@ -1516,6 +1831,44 @@ class PopupMenu:
         shown as a small chip on the right."""
         self.items.append((label, command, checked, danger, icon, key))
         return self
+
+    def swatches(self, colors, current, command) -> PopupMenu:
+        """A row of colour swatches at the menu's top (phase 11: colour from the note); the one in
+        use is ticked; a click closes the menu and calls ``command(colour)``."""
+        self._swatch = ([c.upper() for c in colors], str(current).upper(), command)
+        return self
+
+    @property
+    def swatch_current(self):
+        return self._swatch[1] if self._swatch else None
+
+    def choose_swatch(self, color):
+        command = self._swatch[2]
+        self.close()
+        command(color)
+
+    def _swatch_row(self, body, c):
+        px = self.app.px
+        colors, current, _command = self._swatch
+        row = tk.Frame(body, bg=c.bg, bd=0)
+        row.pack(fill="x", padx=px(10), pady=(px(2), px(6)))
+        size, per = px(18), 7
+        for i, color in enumerate(colors):
+            cv = tk.Canvas(row, width=size, height=size, bd=0, highlightthickness=0, bg=c.bg, cursor="hand2")
+            cv.grid(row=i // per, column=i % per, padx=(0, px(4)), pady=(0, px(4)))
+            sc = Colors.of(cv, color, solid=True)
+            ring = readable(cv, sc.border, c.bg, MARK_CONTRAST)
+            tick = sc.fg if color == current else None
+            rest = dot_photo(self.app, color, ring, size, px(1), tick)          # smooth (no jagged ovals),
+            hover = dot_photo(self.app, color, c.fg, size, px(2), tick)         # the hover a firmer ring
+            item = cv.create_image(size // 2, size // 2, image=rest)
+            cv._photos = (rest, hover)
+            cv.bind("<Enter>", lambda e, cv=cv, it=item: cv.itemconfigure(it, image=cv._photos[1]))
+            cv.bind("<Leave>", lambda e, cv=cv, it=item: cv.itemconfigure(it, image=cv._photos[0]))
+            cv.bind("<ButtonRelease-1>", lambda e, col=color: self.choose_swatch(col))
+            self.swatch_cells.append((color, cv))
+        if self.items:
+            tk.Frame(body, bg=c.border, height=1).pack(fill="x", padx=px(8), pady=px(3))
 
     def separator(self) -> PopupMenu:
         self.items.append(None)
@@ -1542,6 +1895,8 @@ class PopupMenu:
         body = self.body = tk.Frame(top, bg=c.bg, bd=0)
         body.pack(fill="both", expand=True, padx=1, pady=1)
         tk.Frame(body, bg=c.bg, height=px(4)).pack(fill="x")
+        if self._swatch:
+            self._swatch_row(body, c)
         icons = any(item and item[4] for item in self.items)
         for item in self.items:
             if item is None:
@@ -1550,18 +1905,22 @@ class PopupMenu:
             label, _command, checked, danger, icon, key = item
             row = tk.Frame(body, bg=c.bg, cursor="hand2")
             row.pack(fill="x")
-            mark = tk.Label(row, text=GLYPH["check"] if checked else "", width=2, bg=c.bg, fg=c.fg,
+            on_chip = bool(checked and icon and not isinstance(icon, tuple) and self.app.icons.available)
+            mark = tk.Label(row, text=GLYPH["check"] if checked and not on_chip else "", width=2, bg=c.bg, fg=c.fg,
                             font=(self.app.icon_font, 8))
             mark.pack(side="left", padx=(px(6), 0))
             parts = [row, mark]
             if icons:                       # one column of icons, blank where an item has none
                 pic = tk.Label(row, bg=c.bg, bd=0, image=blank_icon(self.app), width=px(16))   # px: has an image
                 pic.pack(side="left", padx=(0, px(6)))
-                if icon:
+                if on_chip:                 # on: the icon on the rail's chip (icons C)
+                    pic.configure(image=chip_photo(self.app, icon, c.fg, c.select, SMALL_ICON_BOX, 2))
+                    pic.chip = True
+                elif icon:
                     menu_icon(self.app, pic, icon, c.danger if danger else c.muted)
                 parts.append(pic)
             if key:
-                chip = tk.Label(row, text=key, bg=c.bg, fg=c.muted, font=(UI_FONT, 7), padx=px(3), pady=0,
+                chip = tk.Label(row, text=key, bg=c.bg, fg=c.muted_text, font=(UI_FONT, 9), padx=px(3), pady=0,
                                 highlightthickness=1, highlightbackground=c.border, highlightcolor=c.border)
                 chip.pack(side="right", padx=(px(6), px(10)))
                 parts.append(chip)
