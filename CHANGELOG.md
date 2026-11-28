@@ -47,6 +47,8 @@ tour, and a lighter app. Notes and settings from 1.1 carry over as they are.
 - Dragging linked notes left a neighbour's rail slide picture behind on screen.
 - The resize grip no longer shows a second copy while the rail slides.
 - A rail slide cut short (a drag, minimize, close) now leaves the note laid out correctly.
+- Update check: with no published release yet (only pre-releases or drafts), it says you are up
+  to date instead of "Couldn't read GitHub's reply".
 
 ### Lighter
 - About 26 % less memory with 20 notes (68 → 50 MB): screenshots used for slides are no longer

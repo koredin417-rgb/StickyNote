@@ -115,6 +115,15 @@ class UpdaterFlowTest(unittest.TestCase):
         self.drain(u)
         self.assertEqual((u.state, u.error), ("error", "upd_err_network"))
 
+    def test_no_published_release_is_up_to_date(self):
+        """GitHub's /latest answers 404 while only pre-releases or drafts exist: up to date, not
+        "Couldn't read GitHub's reply" (the user saw that with only a pre-release out)."""
+        self.get.raises = webget.WebError("Not Found", status=404)
+        u = self.updater()
+        u.check()
+        self.drain(u)
+        self.assertEqual((u.state, u.error), ("latest", ""))
+
     def test_check_rate_limited(self):
         for status in (403, 429):
             self.get.raises = webget.WebError("slow down", status=status)
