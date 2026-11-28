@@ -13,7 +13,6 @@ class ShotsTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         self.settle()
 
     def tearDown(self):
@@ -155,7 +154,6 @@ class RollPictureTest(ShotsTest):
         nw.sync_from_widgets()
         nw.win.focus_force()                    # (no blinking caret in the pictures)
         self.settle(0.4)
-        nw.close_hints()                        # (the first-start tips come back after a while)
         self.settle(0.2)
 
     def test_fold_all_then_unfold_rolls_the_painted_picture(self):

@@ -132,6 +132,47 @@ class PersistMixin:
             self._dirty, self._saved_edits, self._saved_shape = False, _store.edits, shape
         except OSError as exc:              # (still dirty: the next save tries again)
             self._log(f"save failed: {exc!r}")
+            self._save_result(False)
+        else:
+            self._save_result(True)
+
+    def _save_result(self, ok: bool) -> None:
+        """Saving fails SAVE_FAILS_NOTICE times in a row: every note says so, with Open folder,
+        until a save works (Q8; it used to go only to error.log)."""
+        for w in list(self.windows.values()):       # phase 10 K: the saved dot (red while it fails)
+            try:
+                w.saved(ok)
+            except tk.TclError:
+                pass
+        fails = 0 if ok else getattr(self, "_save_fails", 0) + 1
+        self._save_fails = fails
+        shown = getattr(self, "_save_notice", False)
+        if ok != shown or (not ok and fails < SAVE_FAILS_NOTICE):
+            return                          # (failing again: the notice is up, or comes back, as it is)
+        self._save_notice = not ok
+        for w in list(self.windows.values()):
+            try:
+                if not ok:
+                    w.show_sticky(tr("save_failed"), self.open_folder, GLYPH["folder"], tr("open_folder"))
+                elif getattr(w, "_sticky", False):
+                    w.hide_undo()
+            except tk.TclError:             # (a window going away)
+                pass
+
+    def tip_once(self, key) -> bool:
+        """True the first time ever for the tip ``key`` (store.TIPS), which is then saved as shown."""
+        if key in self.prefs.tips_seen:
+            return False
+        self.prefs.tips_seen = self.prefs.tips_seen + [key]
+        self.request_save()
+        return True
+
+    def open_folder(self) -> None:
+        """The memos' folder in Explorer."""
+        try:
+            os.startfile(str(self.store.folder))
+        except OSError as exc:
+            self._log(f"open folder failed: {exc!r}")
 
     def _ending_session(self) -> None:
         try:

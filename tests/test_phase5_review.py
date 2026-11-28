@@ -8,6 +8,7 @@ from PIL import Image
 
 from _support import close_app, make_app, pump
 from store import Note
+from ui_common import animating
 
 TAGS = ("bullet", "todo", "todo_box", "todo_done", "bi")
 
@@ -18,7 +19,6 @@ class ReviewTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         pump(self.app, timeout=0.2)
 
     def tearDown(self):
@@ -68,7 +68,7 @@ class ReviewTest(unittest.TestCase):
         area = self.nw.list_view.area
         y0 = area.canvas.canvasy(0)
         area.scroll._wheel(SimpleNamespace(delta=-120))
-        pump(self.app, timeout=0.1)
+        pump(self.app, lambda: not animating(area.canvas, "smooth"), timeout=1)    # (the glide's end)
         self.assertEqual(area.canvas.canvasy(0) - y0, self.app.px(24))
 
     # 3. the pictures on cards let go of are not held

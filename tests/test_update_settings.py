@@ -15,7 +15,7 @@ import version
 from texts import tr
 
 
-def reply(tag="v1.2.0") -> bytes:
+def reply(tag="v9.0.0") -> bytes:
     return json.dumps({"tag_name": tag, "body": "## New\n* faster drag", "draft": False,
                        "assets": [{"name": "StickyNote.zip", "browser_download_url": "https://example.test/z",
                                    "size": 10, "digest": None}]}).encode()
@@ -81,7 +81,7 @@ class UpdateSettingsTest(unittest.TestCase):
         nw.show_settings()
         pump(self.app, timeout=0.2)
         self.assertEqual(nw.settings_view.list_rows["set_update"][2].cget("text"), f"v{version.VERSION}")
-        self.assertEqual(version.VERSION, "1.1.0")
+        self.assertEqual(version.VERSION, "1.2.0")
 
     def test_check_shows_new_version(self):
         sv = self.open_page(self.start())
@@ -89,7 +89,7 @@ class UpdateSettingsTest(unittest.TestCase):
         self.assertIn(tr("upd_installed", v=version.VERSION), shown_texts(page))
         self.check(sv)
         shown = shown_texts(page)
-        self.assertIn(tr("upd_new", v="1.2.0"), shown)
+        self.assertIn(tr("upd_new", v="9.0.0"), shown)
         self.assertIn("New\n• faster drag", shown)
         self.assertIn(tr("upd_now"), shown)
         self.assertIn(tr("upd_later"), shown)
@@ -112,7 +112,7 @@ class UpdateSettingsTest(unittest.TestCase):
         a, b = self.open_page(first), self.open_page(second)
         self.check(a)
         for sv in (a, b):
-            self.assertIn(tr("upd_new", v="1.2.0"), shown_texts(sv.pages["set_update"]))
+            self.assertIn(tr("upd_new", v="9.0.0"), shown_texts(sv.pages["set_update"]))
         self.assertEqual(self.get.call_count, 1)
 
     def test_long_notes_cut_at_twelve_lines(self):
@@ -142,14 +142,14 @@ class UpdateSettingsTest(unittest.TestCase):
         self.assertIsNone(ref())
 
     def test_startup_result_notice(self):
-        (self.folder / "update-result.json").write_text('{"version": "1.2.0", "ok": true, "error": ""}', "utf-8")
+        (self.folder / "update-result.json").write_text('{"version": "9.0.0", "ok": true, "error": ""}', "utf-8")
         nw = self.start()
-        pump(self.app, lambda: nw.toast_text.cget("text") == tr("upd_done", v="1.2.0"), timeout=2)
-        self.assertEqual(nw.toast_text.cget("text"), tr("upd_done", v="1.2.0"))
+        pump(self.app, lambda: nw.toast_text.cget("text") == tr("upd_done", v="9.0.0"), timeout=2)
+        self.assertEqual(nw.toast_text.cget("text"), tr("upd_done", v="9.0.0"))
         self.assertFalse((self.folder / "update-result.json").exists())
 
     def test_startup_failed_result(self):
-        (self.folder / "update-result.json").write_text('{"version": "1.2.0", "ok": false, "error": "disk"}', "utf-8")
+        (self.folder / "update-result.json").write_text('{"version": "9.0.0", "ok": false, "error": "disk"}', "utf-8")
         self.app = make_app(self.folder)                # (its own Updater: it holds the failure)
         pump(self.app, lambda: len(self.app.windows) == 1)
         nw = next(iter(self.app.windows.values()))

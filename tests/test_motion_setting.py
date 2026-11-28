@@ -114,7 +114,7 @@ class MotionSettingTest(unittest.TestCase):
 
     def test_settings_row_lists_three_modes(self):
         self.assertIn("set_motion", dict(ui_views.SETTING_GROUPS)["grp_place"])
-        self.assertEqual(texts.tr("motion_reduced"), "줄이기" if texts.language() == "ko" else "Reduced")
+        self.assertEqual(texts.tr("motion_reduced"), "줄임" if texts.language() == "ko" else "Reduced")
         self.nw.toggle_settings()
         pump(self.app, timeout=0.3)
         sv = self.nw.settings_view

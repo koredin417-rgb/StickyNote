@@ -17,7 +17,7 @@ import webget
 from updater import Updater, clean_temp, read_result
 
 
-def make_zip(path: Path, version="1.2.0", extra=None) -> Path:
+def make_zip(path: Path, version="9.0.0", extra=None) -> Path:
     """A release zip as tools/make_release.py builds it (only what the updater looks at)."""
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("StickyNote/runtime/python.exe", b"py")
@@ -38,7 +38,7 @@ class FakeProc:
         return self.code
 
 
-def reply(tag="v1.2.0", size=0, sha=None) -> bytes:
+def reply(tag="v9.0.0", size=0, sha=None) -> bytes:
     return json.dumps({"tag_name": tag, "body": "## New\n* faster", "draft": False, "prerelease": False,
                        "assets": [{"name": "StickyNote.zip", "browser_download_url": "https://example.test/z",
                                    "size": size, "digest": f"sha256:{sha}" if sha else None}]}).encode()
@@ -90,14 +90,14 @@ class UpdaterFlowTest(unittest.TestCase):
         self.assertEqual(u.state, "available")
         u.start_install()
         self.drain(u)
-        return self.temp / "StickyNote-update-1.2.0" / "StickyNote"
+        return self.temp / "StickyNote-update-9.0.0" / "StickyNote"
 
     # ---- checking
     def test_check_finds_new(self):
         u = self.updater()
         u.check()
         self.drain(u)
-        self.assertEqual((u.state, u.release.version), ("available", "1.2.0"))
+        self.assertEqual((u.state, u.release.version), ("available", "9.0.0"))
         self.assertEqual(u.release.notes, "New\n• faster")
         self.assertEqual(self.get.calls[0][0][1], updater.HEADERS)
 
@@ -231,7 +231,7 @@ class UpdaterFlowTest(unittest.TestCase):
 
     def test_missing_installer_in_zip(self):
         with zipfile.ZipFile(self.tmp / "half.zip", "w") as z:
-            z.writestr("StickyNote/app/version.py", 'VERSION = "1.2.0"\n')
+            z.writestr("StickyNote/app/version.py", 'VERSION = "9.0.0"\n')
         self.zip = self.tmp / "half.zip"
         u = self.updater()
         self.installed(u)
@@ -252,7 +252,7 @@ class UpdaterFlowTest(unittest.TestCase):
         self.assertEqual(self.popen.call_count, 0)
 
     def test_download_dir_starts_empty(self):
-        stale = self.temp / "StickyNote-update-1.2.0" / "StickyNote" / "app" / "stale.py"
+        stale = self.temp / "StickyNote-update-9.0.0" / "StickyNote" / "app" / "stale.py"
         stale.parent.mkdir(parents=True)
         stale.write_text("old")
         u = self.updater()
@@ -288,7 +288,7 @@ class UpdaterFlowTest(unittest.TestCase):
         self.code = 1
         self.data.mkdir()
         (self.data / "update-result.json").write_text(
-            '{"version": "1.2.0", "ok": false, "error": "still running"}', "utf-8")
+            '{"version": "9.0.0", "ok": false, "error": "still running"}', "utf-8")
         u = self.updater()
         self.installed(u)
         self.assertEqual((u.state, u.error, u.error_detail), ("error", "upd_err_install", "still running"))
@@ -313,8 +313,8 @@ class UpdaterFlowTest(unittest.TestCase):
     def test_read_result_once(self):
         data = self.tmp / "data"
         data.mkdir()
-        (data / "update-result.json").write_text('{"version": "1.2.0", "ok": true, "error": ""}', "utf-8")
-        self.assertEqual(read_result(data), {"version": "1.2.0", "ok": True, "error": ""})
+        (data / "update-result.json").write_text('{"version": "9.0.0", "ok": true, "error": ""}', "utf-8")
+        self.assertEqual(read_result(data), {"version": "9.0.0", "ok": True, "error": ""})
         self.assertIsNone(read_result(data))
         (data / "update-result.json").write_text("{broken", "utf-8")
         self.assertIsNone(read_result(data))

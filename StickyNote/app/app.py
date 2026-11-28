@@ -169,7 +169,10 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
         self._update_job = None
 
         data = self.store.load()
+        self.tour = None                           # the first start's tour while it shows (tour.py)
         self.prefs = data.prefs
+        if self.prefs.rail_hide is None:            # phase 11: the calm rail for new users; people
+            self.prefs.rail_hide = self.store.fresh     # updating keep the rail as it was (Settings)
         self.apply_motion()                         # Animations: the user's choice, else Windows' setting
         Colors.keep_solid(self.prefs.solid_colors)      # Settings: strong colors painted solid all the same
         self._load_setup(data.pads)                 # N5: the copies of this screen setup (before any window)
@@ -211,11 +214,14 @@ class App(TaskbarMixin, PersistMixin, ScreensMixin, SettingsMixin, RegistryMixin
         if self.prefs.auto_layout:
             self.hold_links(True)
         self._start_up()                            # (every window is in self.windows now)
+        if self.store.fresh and not self.prefs.tour_done:     # a new user: the first start (backlog 5)
+            self.root.after(400, lambda: not self.prefs.tour_done and not self.closed and self.start_tour())
         self.save_now()
         self._screen_job = self.root.after(SCREEN_POLL_MS, self._poll_screens)    # (a safety net: "screens")
-        if not self.prefs.hints_seen:               # once: the controls that are easy to miss
+        if self.store.from_backup:                  # notes.json could not be read (Q8)
             first = next(iter(self.windows.values()))
-            self.root.after(300, lambda: first.win.winfo_exists() and first.show_hints())
+            self.root.after(BACKUP_NOTICE_MS, lambda: first.win.winfo_exists()
+                            and first.show_notice(tr("loaded_backup")))
 
         self._day_job = None
         self._arm_day()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import calendar as _calendar
 import colorsys
+import gc
 from collections import OrderedDict
 import os
 import sys
@@ -69,7 +70,16 @@ class RegistryMixin:
         self._place(pad)
         nw = self.windows[pad.id] = NoteWindow(self, pad, note, fade_in=fade_in)
         self.space_changed()                        # it takes up space now
+        self.close_tips()
         return nw
+
+    def close_tips(self):
+        """The × says when closing a note closes the app: the last note (Q7)."""
+        last = len(self.windows) <= 1
+        for w in self.windows.values():
+            b = getattr(w, "btn_close", None)
+            if b is not None:
+                b.tooltip.text = tr("tip_close_last" if last else "tip_close")
 
     # ---- memos -------------------------------------------------------------------------
     def add_note(self, note: Note) -> Note:
@@ -124,6 +134,39 @@ class RegistryMixin:
         self.refresh_lists()
         self.save_soon()                            # (after the card's flight to the bin)
         return True
+
+    def trash_notes(self, ids) -> list[str]:
+        """Move several memos to the bin at once (the list's select mode): the ids that went. One
+        list refresh and one save for the lot; windows showing one switch to another memo."""
+        gone, now = [], datetime.now().isoformat(timespec="microseconds")
+        for note_id in ids:
+            note = self.notes.get(note_id)
+            if note is None or note.deleted:
+                continue
+            shown_in = self.window_for(note_id)
+            if shown_in is not None:
+                shown_in.sync_from_widgets()
+            if note.is_empty:
+                continue
+            note.deleted, note.pinned = now, None
+            gone.append(note_id)
+            if shown_in is not None:
+                shown_in._load_note(self._latest_unshown() or self.blank_note(note))
+        if gone:
+            self.refresh_lists()
+            self.save_soon()
+        return gone
+
+    def restore_notes(self, ids):
+        """Undo of trash_notes: every one back, one refresh."""
+        back = False
+        for note_id in ids:
+            note = self.notes.get(note_id)
+            if note is not None and note.deleted:
+                note.deleted, back = None, True
+        if back:
+            self.refresh_lists()
+            self.save_soon()
 
     def restore_note(self, note_id) -> Note | None:
         note = self.notes.get(note_id)
@@ -306,18 +349,26 @@ class RegistryMixin:
             self._closed.append(nw.pad)             # for "Reopen closed note" (Ctrl+Shift+T)
             del self._closed[:-CLOSED_KEPT]
         del self.windows[nw.pad.id]
+        self.close_tips()
         self.forget_links(nw.pad.id)                # (calendar_heir has used them: NoteWindow.close)
         self.space_changed()
         self.calendar_buttons()                   # its calendar goes with it: the others get the icon
         self.arrange_soon()                         # auto layout: the others close up
         if nw.note.is_empty:
             self.discard_note(nw.note)
+        else:                                       # "Note closed [Reopen]" where the keyboard goes (Q7)
+            shown = [w for w in self._shown_notes() if not w.pad.collapsed]    # (folded: no room for it)
+            heir = self.last_note if self.last_note in shown else (shown[-1] if shown else None)
+            if heir is not None:
+                text = tr("once_close") if self.tip_once("close") else tr("toast_closed")
+                heir.show_undo_action(text, lambda h=heir: self.reopen_closed(h), tip=tr("menu_reopen"))
         self.save_soon()                            # once it has faded out
 
         def gone():                                 # the keyboard to a note still shown first: Windows
             self.note_minimized(nw)                 # would hand it to the proxy (read as a taskbar click)
             nw.destroy()
             self._minimized_at = time.monotonic()
+            self.clock.idle(gc.collect)             # (its widgets are a cycle: freed now the app is quiet)
         nw.fade_out(gone)                           # fades out, then goes
 
     def pin_note(self, note: Note) -> bool:

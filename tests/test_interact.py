@@ -20,7 +20,6 @@ class InteractTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         self.settle()
 
     def tearDown(self):

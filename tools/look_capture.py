@@ -76,7 +76,6 @@ def snap(tag, only=None):
 
 def steps():
     a = next(iter(app.windows.values()))
-    a.close_hints()
     fill(a, "이번 주 할 일" if app.prefs.language != "en" else "This week",
          "• 디자인 시안 정리\n☐ 회의록 보내기\n☑ 장보기\n☐ 치과 예약 (목 3시)")
     yield 400

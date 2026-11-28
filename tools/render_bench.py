@@ -37,7 +37,6 @@ def main():
     app = App(Path(tempfile.mkdtemp(prefix="sticky-render-")))
     pump(app, 1.5)
     nw = next(iter(app.windows.values()))
-    nw.close_hints()
     out = {}
 
     # ---- the list

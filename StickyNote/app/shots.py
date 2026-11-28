@@ -67,12 +67,17 @@ class ShotCache:
             self._stale.discard(nw.pad.id)
         return img
 
-    def fresh(self, nw) -> Image.Image | None:
+    def fresh(self, nw, keep=True) -> Image.Image | None:
         """Its picture taken now (it shows, painted), kept for later. Fold, minimize and the fly
-        take this: something not counted in the look version may have changed since."""
+        take this: something not counted in the look version may have changed since. ``keep``
+        False (a slide's cover: the rail, a page): kept only for a note in a linked group (a group
+        resize reads it); else no picture is held for it (some 0.4 MB a note, never read again)."""
         img = capture(nw.win)
         if img is not None:
-            self._shots[nw.pad.id] = (self._key(nw), img)
+            if keep or len(self.app.group_of(nw.pad.id)) >= 2:
+                self._shots[nw.pad.id] = (self._key(nw), img)
+            else:
+                self._shots.pop(nw.pad.id, None)
             self._stale.discard(nw.pad.id)
         return img
 
@@ -83,7 +88,11 @@ class ShotCache:
 
     # ---- taken ahead, when idle
     def stale(self, nw) -> None:
-        """``nw``'s look changed. A note in a linked group gets a new picture once the app is quiet."""
+        """``nw``'s look changed. A note in a linked group gets a new picture once the app is quiet.
+        The kept one can never be current again (the look version only goes up): it goes now."""
+        entry = self._shots.get(nw.pad.id)
+        if entry is not None and (entry[0] is None or entry[0][0] != nw.look_version):
+            del self._shots[nw.pad.id]
         if len(self.app.group_of(nw.pad.id)) < 2:
             return
         self._stale.add(nw.pad.id)

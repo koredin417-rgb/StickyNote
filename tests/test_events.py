@@ -15,7 +15,6 @@ class WakerTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         pump(self.app, lambda: not self.app.motion.busy(), timeout=2)
         pump(self.app, timeout=0.4)
 

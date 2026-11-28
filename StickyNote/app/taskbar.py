@@ -69,6 +69,11 @@ class TaskbarMixin:
         p.overrideredirect(True)
         p.title(tr("app_title"))
         p.protocol("WM_SAVE_YOURSELF", self._ending_session)      # Windows shutting down / signing out
+        # The button's "Close window" (and Alt+F4 while the proxy has the focus) sends WM_CLOSE.
+        # Tk alone would destroy the proxy, and Windows the notes it owns with it: the app ran on
+        # with nothing on screen, and every later start only asked it to show them. It quits
+        # instead, every note kept for the next start.
+        p.protocol("WM_DELETE_WINDOW", self.quit)
         p.geometry("1x1+-30000+-30000")
         p.attributes("-alpha", 0.0)
         p.deiconify()

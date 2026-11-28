@@ -19,7 +19,6 @@ class CalendarEdgeTest(unittest.TestCase):
         self.app = make_app(Path(self.tmp.name))
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         self.settle()
 
     def tearDown(self):
@@ -131,7 +130,6 @@ class CalendarEdgeTest(unittest.TestCase):
                                                       Screen(monitor=(1920, 0, 3840, 1080), work=(1920, 0, 3840, 1040))])
         pump(self.app, lambda: len(self.app.windows) == 1)
         self.nw = next(iter(self.app.windows.values()))
-        self.nw.close_hints()
         self.settle()
         p = self.nw.pad
         left, top, right, bottom = self.app.area_of((10, 10, 20, 20))

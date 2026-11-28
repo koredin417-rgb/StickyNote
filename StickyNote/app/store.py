@@ -50,6 +50,7 @@ INLINE = "\ufffc"                   # stands for a picture inside a tab's text (
 LIST_SORTS = ("date", "added")      # list order: by the memo's day (newest first) / by when it was made
 TIDY_ORDERS = ("place", "date", "pinned")   # where they are now / memo date (newest first) / always-on-top first
 LIST_SECTIONS = ("pinned", "others")    # the list's two parts, each can be folded shut
+TIPS = ("link", "close", "fold", "calendar")     # the one-time tips (U1): each shows once, ever
 CURSOR_COLORS = ("opposite", "text")    # text cursor: the main theme's opposite color / the text color
 BIN_DAY_CHOICES = (1, 7, 30)        # how long the bin keeps memos (Settings)
 BACKUPS_KEPT = 7                    # daily copies of notes.json in backups\ (one per day, newest kept)
@@ -577,7 +578,7 @@ class Prefs(_Tracked):
     group_drag: bool = True         # dragging a note takes the notes snapped to it along
     auto_layout: bool = False       # the notes tiled from a screen edge, kept so (App.arrange)
     auto_cell: list | None = None   # [width, height] px of the tiles (a note resized while tiled); None = new-note size
-    hints_seen: bool = False        # the short "hidden controls" hint was shown and closed
+    tips_seen: list[str] = field(default_factory=list)  # the one-time tips already shown (TIPS)
     list_oldest: bool = False       # the list's memos oldest first (else newest first)
     cursor_color: str = "opposite"  # text cursor: one of CURSOR_COLORS
     bin_days: int = 7               # memos stay in the bin this long (BIN_DAY_CHOICES)
@@ -593,6 +594,8 @@ class Prefs(_Tracked):
     # strong colors painted solid all the same ("Keep solid color" in Settings): no pale page for them
     solid_colors: list[str] = field(default_factory=list)
     motion: str | None = None       # animations: "full", "reduced", "off"; None = follow Windows (anim)
+    rail_hide: bool | None = None   # phase 11: the calm rail (Settings > 배치); None: not chosen yet (App)
+    tour_done: bool = False         # the first start's tour was seen or skipped (backlog 5)
     minimize_style: str = "bar"     # minimize: "bar" (folds to its top bar; folded, goes away), "fold"
                                     # (rolls away, back from the taskbar) or "sticker"
 
@@ -617,6 +620,9 @@ class Prefs(_Tracked):
         self.list_oldest = bool(self.list_oldest)
         if self.minimize_style not in ("fold", "bar", "sticker"):
             self.minimize_style = "bar"
+        self.tour_done = bool(self.tour_done)
+        if self.rail_hide is not None:
+            self.rail_hide = bool(self.rail_hide)
         if self.motion not in (None, "full", "reduced", "off"):
             self.motion = None
         if self.tidy_order not in TIDY_ORDERS:
@@ -627,7 +633,8 @@ class Prefs(_Tracked):
         if not (isinstance(self.auto_cell, list) and len(self.auto_cell) == 2
                 and all(isinstance(v, int) and 100 <= v <= 4000 for v in self.auto_cell)):
             self.auto_cell = None
-        self.hints_seen = bool(self.hints_seen)
+        seen = self.tips_seen if isinstance(self.tips_seen, list) else []
+        self.tips_seen = [t for t in TIPS if t in seen]
         sections = self.list_collapsed if isinstance(self.list_collapsed, list) else []
         self.list_collapsed = [s for s in LIST_SECTIONS if s in sections]
         if self.last_style not in STYLES:
@@ -695,10 +702,15 @@ class NoteStore:
 
     # ---- notes and pads ------------------------------------------------
     def load(self) -> Data:
+        self.from_backup = False            # notes.json could not be read: the backup was (Q8)
+        self.fresh = False                  # nothing to read: a new user (phase 11's rail default)
         for candidate in (self.path, self.backup):
             data = self._read(candidate)
             if data is not None:
+                self.from_backup = candidate == self.backup
                 return data
+        self.fresh = not (self.path.exists() or self.backup.exists() or any(self.folder.glob("notes*.json"))
+                          or (self.folder / "backups").exists())
         return Data([], [])
 
     @staticmethod

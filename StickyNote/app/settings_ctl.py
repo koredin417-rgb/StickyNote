@@ -266,6 +266,21 @@ class SettingsMixin:
         nw.show_notice(tr("default_size_set" if self.prefs.note_size else "default_size_off"))
         self.request_save()
 
+    def start_tour(self, replay=False):
+        """The first start's tour (tour.py); ``replay``: from Settings, the five stops only."""
+        if getattr(self, "tour", None) is not None or not self.windows:
+            return
+        from tour import FirstStart
+        self.tour = FirstStart(self, replay)
+
+    def set_rail_hide(self, on):
+        """Settings: the calm rail (phase 11). Off: every hidden rail shows again at once."""
+        self.prefs.rail_hide = bool(on)
+        self.request_save()
+        self._sync_settings()
+        for w in self.windows.values():
+            w.rail_calm.check_soon()
+
     def set_auto_layout(self, on):
         """Settings: auto layout. On: the notes are tiled at once and kept tiled (arrange), their
         links on hold. Off (L5): the tiles keep the size they have (each has its own size

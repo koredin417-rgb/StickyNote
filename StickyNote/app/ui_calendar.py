@@ -75,7 +75,7 @@ class HolidayCard:
         self.frame.pack(fill="both", expand=True, padx=1, pady=1)
         self.name = tk.Label(self.frame, font=(UI_BOLD, 9, "bold"), anchor="w", justify="left")
         self.name.pack(fill="x", padx=cal.app.px(10), pady=(cal.app.px(6), 0))
-        self.text = tk.Label(self.frame, font=(UI_FONT, 8), anchor="w", justify="left")
+        self.text = tk.Label(self.frame, font=(UI_FONT, 9), anchor="w", justify="left")
         self.text.pack(fill="x", padx=cal.app.px(10), pady=(0, cal.app.px(6)))
 
     def show(self, iso):
@@ -147,6 +147,63 @@ def circle_image(d, fill, scale=4):
     big = Image.new("RGBA", (d * scale, d * scale), (r, g, b, 0))      # (the fill's own colour: no dark fringe)
     ImageDraw.Draw(big).ellipse((0, 0, d * scale - 1, d * scale - 1), fill=(r, g, b, 255))
     return big.resize((d, d), Image.LANCZOS)
+
+
+WARM_HUES = (40 / 360, 75 / 360)   # yellows: deep, they turn olive ...
+WARM_DEEP_HUE = 36 / 360            # ... so they lean amber instead ("warm deep", picked 2026-11-28)
+
+
+def deep_color(widget, c) -> str:
+    """The theme colour ``c`` (Colors), deep and readable on it: today's pill and the day count.
+    A yellow leans amber; other hues keep their own."""
+    r, g, b = _rgb(widget, c.bg)
+    h, _l, s = colorsys.rgb_to_hls(r, g, b)
+    grey = s < 0.08 or max(r, g, b) - min(r, g, b) < 0.04
+    s = 0.0 if grey else max(s, 0.55)
+    if not grey and WARM_HUES[0] <= h <= WARM_HUES[1]:
+        h = WARM_DEEP_HUE
+    deep = "#%02X%02X%02X" % tuple(round(v * 255) for v in colorsys.hls_to_rgb(h, 0.75 if c.dark else 0.33, s))
+    return readable(widget, deep, c.bg, TEXT_CONTRAST)
+
+
+MORPH_FADE_MS = anim.FAST       # phase 10: the old view's picture fades off the new view this fast
+CAL_MORPH_MS = anim.LONG        # ... after growing or shrinking to the new view's box over this
+
+
+class _Morph:
+    """Phase 10: the calendar's old view as a picture in a click-through window over it, scaled to
+    the calendar's box each frame (pasted into one PhotoImage, from a half-size copy once it is
+    half as big or less: about 1-2 ms a frame, spike of 2026-11-28)."""
+
+    def __init__(self, cal, img, alpha):
+        self.cal, self.img, self.alpha, self.frames = cal, img, alpha, 0
+        self.half = img.resize((max(1, img.width // 2), max(1, img.height // 2)), Image.BOX)
+        t = cal.top
+        top = self.top = tk.Toplevel(t)
+        top.withdraw()
+        top.overrideredirect(True)
+        w, h = img.size
+        self.cv = tk.Canvas(top, bd=0, highlightthickness=0, width=w, height=h)
+        self.cv.pack(fill="both", expand=True)
+        self.photo = ImageTk.PhotoImage(img, master=top)
+        self.cv.create_image(0, 0, anchor="nw", image=self.photo)
+        self.size = (w, h)
+        top.geometry(f"{w}x{h}+{t.winfo_rootx()}+{t.winfo_rooty()}")
+        top.attributes("-alpha", min(alpha, 0.999))        # (click-through: below 1.0)
+        top.attributes("-topmost", bool(t.attributes("-topmost")))
+        top.deiconify()
+        winapi.set_click_through(top, True)
+        top.lift(t)
+
+    def place(self, x, y, w, h):
+        x, y, w, h = round(x), round(y), max(1, round(w)), max(1, round(h))
+        if (w, h) != self.size:
+            self.size = (w, h)
+            src = self.half if w * 2 <= self.img.width and h * 2 <= self.img.height else self.img
+            self.photo._PhotoImage__photo.configure(width=w, height=h)
+            self.photo.paste(src.resize((w, h), Image.BILINEAR))
+            self.cv.configure(width=w, height=h)
+        self.top.geometry(f"{w}x{h}+{x}+{y}")
 
 
 class CalendarPopup:
@@ -257,7 +314,7 @@ class CalendarPopup:
         self.detail = tk.Frame(self.frame, bd=0)
         self.detail_name = tk.Label(self.detail, font=(UI_BOLD, 9, "bold"), anchor="w", justify="left")
         self.detail_name.pack(fill="x")
-        self.detail_text = tk.Label(self.detail, font=(UI_FONT, 8), anchor="w", justify="left",
+        self.detail_text = tk.Label(self.detail, font=(UI_FONT, 9), anchor="w", justify="left",
                                     wraplength=self.cell_w * 7)
         self.detail_text.pack(fill="x")             # (never packed: the HolidayCard shows it)
         self.holiday_card = HolidayCard(self)
@@ -1008,29 +1065,86 @@ class CalendarPopup:
         self.click_view("mini" if self.expanded else "big")
 
     def click_view(self, view: str) -> None:
-        """The user's own click on a view (option 4, "살짝 사라졌다 나타나기"): the calendar dips out
-        (VIEW_DIP_MS), switches while it can't be seen (no half-way frames), then fades back."""
+        """The user's own click on a view (phase 10: one morph). A picture of the view as it is, in a
+        click-through window over the calendar, follows the calendar's box while it glides to the
+        new view's size (scaled each frame, the live calendar hidden under it), then fades away over
+        the live new view. Reduced: the box jumps under that fade. Off, or nothing to picture: the
+        switch at once."""
+        self._end_morph()
         top = self.top
         try:
             a0 = _alpha(top)
             shown = self.target_box is not None and top.winfo_ismapped() and a0 > 0.05
         except tk.TclError:
             shown = False
-        if not shown or getattr(self, "_closing", False):
+        snap = None
+        if shown and not getattr(self, "_closing", False) and self.app.clock.mode != "off":
+            try:
+                snap = winapi.snapshot(top)
+            except Exception:               # (no picture: the plain switch)
+                snap = None
+        if not snap:
             self._click_view_now(view)
             return
-        self._dipping = True                # hovering in or out meanwhile does not take the fade over
-        anim.clock_of(top).stop(top, "alpha")
-
-        def out(k):
-            top.attributes("-alpha", a0 * (1 - k))
-
-        def switch():
-            self._dipping = False
+        w, h, raw = snap
+        img = Image.frombuffer("RGB", (w, h), raw, "raw", "BGRX", 0, 1).copy()
+        try:
+            m = self._morph = _Morph(self, img, a0)
+        except tk.TclError:
+            self._morph = None
             self._click_view_now(view)
-            if not getattr(self, "_closing", False):
-                self.apply_alpha(animated=True)     # back to what it should be (HOVER_FADE_MS)
-        animate(top, "dip", VIEW_DIP_MS, out, switch, kind="fade")   # (its own key: the switch rides on nothing shared)
+            return
+        self._dipping = True                # (hovering meanwhile does not take the see-through over)
+        stop_animation(top, "alpha")
+        top.attributes("-alpha", 0.0)       # the live calendar, under the picture, out of sight
+        self._click_view_now(view)
+        b0 = (top.winfo_rootx(), top.winfo_rooty(), w, h)
+        goal = self.target_box
+        if goal is None:
+            self._end_morph()
+            return
+        clock = anim.clock_of(top)
+
+        def step(k):
+            g = self.target_box or goal         # (re-planned meanwhile: where it goes now)
+            b1 = (g[0], g[1], g[2] - g[0], g[3] - g[1])
+            m.place(*(a + (b - a) * k for a, b in zip(b0, b1)))
+
+        def settled():                      # the live calendar is where the picture went: show it
+            if self._morph is not m:
+                return
+            if self.app.motion.drives(CAL):
+                clock.request(settled)
+            else:
+                self._finish_morph(m)
+        if self.app.clock.mode == "reduced":    # the box jumps under the fade: the old view not stretched
+            clock.request(settled)
+            return
+        animate(m.top, "morph", CAL_MORPH_MS, step, settled, kind="move")
+
+    def _finish_morph(self, m):
+        """The box is where it goes: the live new view shows again, and the picture fades off it."""
+        self._dipping = False
+        self.apply_alpha(animated=False)
+
+        def step(k):
+            m.top.attributes("-alpha", m.alpha * (1 - k))
+        animate(m.top, "alpha", MORPH_FADE_MS, step, lambda: self._end_morph(m), kind="fade")
+
+    def _end_morph(self, m=None, restore=True):
+        """The picture goes now (the morph ended, a new click, the calendar closing)."""
+        cur = getattr(self, "_morph", None)
+        if cur is None or (m is not None and m is not cur):
+            return
+        self._morph = None
+        try:
+            cur.top.destroy()
+        except tk.TclError:
+            pass
+        if getattr(self, "_dipping", False):
+            self._dipping = False
+            if restore and not getattr(self, "_closing", False):
+                self.apply_alpha(animated=False)
 
     def _click_view_now(self, view: str) -> None:
         """The switch itself: the choice is held (calendar_hold) until the stretch rule agrees with it."""
@@ -1226,7 +1340,7 @@ class CalendarPopup:
         base = round(h / 2 + 0.36 * px(CAL_NUM_PX))         # the digits' ink centred in the row
         cv.create_text(x, base - nf.metrics("ascent"), anchor="nw", text=num, font=nf, fill=c.fg, tags=("text",))
         x += nf.measure(num) + px(6)
-        cv.create_text(x, base - yf.metrics("ascent"), anchor="nw", text=year, font=yf, fill=c.muted, tags=("text",))
+        cv.create_text(x, base - yf.metrics("ascent"), anchor="nw", text=year, font=yf, fill=c.muted_text, tags=("text",))
         today = date.today()
         away = self.month != (today.year, today.month)
         b = self.btn_today
@@ -1239,8 +1353,13 @@ class CalendarPopup:
             stop_animation(b, "ink")
             b.set_ink(target)
             return
-        start = b.ink_color
-        animate(b, "ink", anim.FAST, lambda k: b.set_ink(_mix(self.top, start, target, k)),
+        # through a fixed ramp of HEAD_INK_STEPS colours (page to muted): each colour is a cached
+        # picture, so in-between colours must repeat, not be new every time (Q5)
+        n = HEAD_INK_STEPS
+        ramp = [_mix(self.top, c.bg, c.muted, i / n) for i in range(n + 1)]
+        start = min(range(n + 1), key=lambda i: contrast(self.top, ramp[i], b.ink_color))
+        end = n if away else 0
+        animate(b, "ink", anim.FAST, lambda k: b.set_ink(ramp[round(start + (end - start) * k)]),
                 lambda: b.set_ink(target), kind="fade")
 
     def head_texts(self) -> list[str]:
@@ -1398,13 +1517,8 @@ class CalendarPopup:
         return readable(self.top, line, c.bg, MARK_CONTRAST)
 
     def _deep(self):
-        """The theme color, deep: the selected day's circle and the day count (text: TEXT_CONTRAST)."""
-        c = self.colors
-        r, g, b = _rgb(self.top, c.bg)
-        h, _l, s = colorsys.rgb_to_hls(r, g, b)
-        s = 0.0 if s < 0.08 or max(r, g, b) - min(r, g, b) < 0.04 else max(s, 0.55)
-        deep = "#%02X%02X%02X" % tuple(round(v * 255) for v in colorsys.hls_to_rgb(h, 0.75 if c.dark else 0.33, s))
-        return readable(self.top, deep, c.bg, TEXT_CONTRAST)
+        """The theme color, deep: today's pill and the day count (text: TEXT_CONTRAST)."""
+        return deep_color(self.top, self.colors)
 
     def _mark(self, color):
         """A memo's mark on the calendar (bars under a day, period lines): its color, deep,
@@ -1623,6 +1737,9 @@ class CalendarPopup:
             return
         if self._click_job:
             self.grid.after_cancel(self._click_job)
+        if (d.year, d.month) == self.month and self._drawn_now():    # the day lights up at once (the user:
+            old, self.selected = self.selected, d.isoformat()          # "just slow"); its list waits, as a
+            self._show_selected(old, self.selected)                     # double-click makes a memo there
         self._click_job = self.grid.after(DOUBLE_CLICK_MS, lambda: self._single(d))
 
     def _single(self, d):
@@ -2134,18 +2251,19 @@ class CalendarPopup:
                     g.create_text(nx, ny, text=str(d.day), anchor="center", fill=fg, tags=(f"d{iso}",),
                                   font=(UI_FONT, 9, "normal"))
                 top = y0 + head + lanes * (band_h + gap)        # under this row's period bands
-                names = " · ".join(map(texts.holiday_name, holidays.on(d))) if in_month else ""
-                if names:
-                    g.create_text(name_x, ny, text=self._fit(names, x0 + cw - name_x - px(4), measure),
-                                  anchor="w", fill=c.sunday, font=font)
                 notes = by_day.get(iso, []) if in_month else []
                 room = max(0, (ch - (top - y0) - px(2)) // (chip_h + gap))
+                more_w = 0
+                if len(notes) > room:           # "+N" in the number row, so every chip slot keeps a title (Q2)
+                    more = f"+{len(notes) - room}"
+                    g.create_text(x0 + cw - px(4), ny, text=more, anchor="e", fill=c.muted_text, font=font,
+                                  tags=("more", f"more{iso}"))
+                    more_w = measure(more) + px(4)
+                names = " · ".join(map(texts.holiday_name, holidays.on(d))) if in_month else ""
+                if names:
+                    g.create_text(name_x, ny, text=self._fit(names, x0 + cw - name_x - px(4) - more_w, measure),
+                                  anchor="w", fill=c.sunday, font=font)
                 for i, note in enumerate(notes):
-                    if i == room - 1 and len(notes) > room:
-                        g.create_text(x0 + px(8), top + chip_h / 2, anchor="w", font=font,
-                                      fill=c.muted,
-                                      text=tr("calendar_more", n=len(notes) - i))
-                        break
                     if i >= room:
                         break
                     nc = Colors.of(self.top, note.color)
@@ -2214,6 +2332,7 @@ class CalendarPopup:
 
     def destroy(self, animated=False):
         """Close it; ``animated``: it slides back towards its note, fading out, first."""
+        self._end_morph(restore=False)      # (a morph's picture goes with it; no snap into view)
         self.app.motion.window_gone(CAL)    # a glide in progress stops (it takes up no space now)
         self.hide_peek()
         self._hide_count()
@@ -2235,6 +2354,8 @@ class CalendarPopup:
             return
         self._slide(opening=False, done=lambda: self.top.winfo_exists() and self.top.destroy())
 
+
+CalendarPopup._morph = None             # (phase 10: the morph's picture while one runs)
 
 # every name (underscored ones too) goes on to the next part: see app.py
 __all__ = [_n for _n in list(globals()) if not _n.startswith("__")]

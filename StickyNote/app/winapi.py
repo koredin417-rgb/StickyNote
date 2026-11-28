@@ -601,6 +601,7 @@ NI_COMPOSITIONSTR = 0x0015
 CPS_COMPLETE, CPS_CANCEL = 0x0001, 0x0004
 WM_KILLFOCUS, WM_NCDESTROY, WM_IME_SETCONTEXT = 0x0008, 0x0082, 0x0281
 ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000
+WM_IME_STARTCOMPOSITION = 0x010D       # eaten: the IME's own composition window is never made (below)
 ISC_SHOWUIALL = 0xC000000F
 
 if IS_WINDOWS:
@@ -698,7 +699,8 @@ def hook_ime(hwnd: int) -> bool:
       focus loss before the IME's last character and then throws that character away;
       finished first, it arrives in time.
     * The IME does not draw its own (white) box for the syllable being typed: the app
-      shows it in the text itself (NoteWindow._show_preedit).
+      shows it in the text itself (NoteWindow._show_preedit). The context flag is cleared, and
+      WM_IME_STARTCOMPOSITION is not passed on (current IMEs ignore the flag alone).
 
     Its proc is Python run inside Tk's window proc: hooked, Python collects no garbage by
     itself (see collect_garbage)."""
@@ -714,6 +716,12 @@ def hook_ime(hwnd: int) -> bool:
                 _notify_ime(h, CPS_COMPLETE)
             elif msg == WM_IME_SETCONTEXT:
                 lparam &= ~ISC_SHOWUICOMPOSITIONWINDOW
+            elif msg == WM_IME_STARTCOMPOSITION:
+                # Today's Korean IMEs ignore the flag above and still draw their white box at the
+                # syllable (seen in the installed app too, 2026-11-28). Not passed on, the IME never
+                # makes that window; the syllable is read from the IME (composition) and drawn by
+                # the note itself, and the finished text still comes as WM_IME_COMPOSITION / WM_CHAR.
+                return 0
             elif msg == WM_NCDESTROY:
                 comctl32.RemoveWindowSubclass(h, proc, uid)
                 _focus_hooks.pop(h, None)

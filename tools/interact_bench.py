@@ -50,7 +50,6 @@ class Bench:
 
     def open_20(self):
         last = next(iter(self.app.windows.values()))
-        last.close_hints()
         for _ in range(19):
             last = self.app.new_window(from_window=last)
             self.pump(0.05)
