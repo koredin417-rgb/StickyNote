@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.2.3 — 2026-11-28
+
+Typing fixes: the caret keeps up with held keys, open lists follow edits, Korean shows in
+the search bar and title line.
 
 ### Fixed
 - A memo being written in one note now shows in another note's open memo list after the typing
