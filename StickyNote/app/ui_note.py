@@ -257,6 +257,7 @@ class NoteWindow:
         self.header_var = tk.StringVar(win)
         self.header_entry = tk.Entry(self.home, textvariable=self.header_var,
                                      bd=0, relief="flat", highlightthickness=0)
+        self.header_preedit = EntryPreedit(self.header_entry)      # (Korean: the syllable being typed shows)
         self.header_sep = tk.Frame(self.home, height=1, bd=0)
         self.viewer = ImageViewer(self)
         self.body = tk.Text(self.home, wrap="word", undo=True, bd=0, relief="flat", height=TEXT_MIN_LINES,

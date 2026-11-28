@@ -92,6 +92,8 @@ class PersistMixin:
             for w in self.windows.values():
                 if w.calendar:
                     w.calendar.draw()
+                if w.view == "list" and w.win.winfo_exists():   # an open list too (the user: it still said
+                    w.list_view.refresh(keep_view=True)         # "no memos yet" while one was being written)
 
     @perf.timed("save")
     def save_now(self, force: bool = False):

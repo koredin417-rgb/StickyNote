@@ -1795,6 +1795,65 @@ def _watch_text(text: tk.Text, callback):
     t.call("bind", text._w, "<Destroy>", "+catch {rename %W {}}")
 
 
+class EntryPreedit:
+    """Korean in a one-line entry (the list's search, a memo's title): the syllable the IME is putting
+    together, shown at the insert point as if already typed. The IME's own (white) box is off for
+    the whole note window (winapi.hook_ime), and only the memo text drew the syllable itself
+    (NoteWindow._show_preedit): in an entry it was not seen until it was finished."""
+
+    POLL_MS = 120                   # while a syllable is open: looked at again this often
+
+    def __init__(self, entry):
+        self.entry, self.job = entry, None
+        self.label = tk.Label(entry, bd=0, padx=0, pady=0)
+        entry.bind("<KeyPress>", lambda e: entry.after_idle(self.show), add="+")
+        entry.bind("<KeyRelease>", lambda e: self.show(), add="+")
+        entry.bind("<FocusOut>", lambda e: self.hide(), add="+")
+
+    def hide(self):
+        if self.job is not None:
+            try:
+                self.entry.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+        try:
+            self.label.place_forget()
+        except tk.TclError:
+            pass
+
+    def _insert_x(self) -> int:
+        e = self.entry
+        i, n = e.index("insert"), len(e.get())
+        try:
+            if i < n:
+                return e.bbox(i)[0]
+            if n:
+                b = e.bbox(n - 1)
+                return b[0] + b[2]
+        except (tk.TclError, TypeError):
+            pass
+        return int(e.cget("bd")) + int(e.cget("highlightthickness"))     # (empty: where text starts)
+
+    def show(self):
+        self.job = None
+        e = self.entry
+        try:
+            typing = e.focus_get() is e
+        except (KeyError, tk.TclError):
+            typing = False
+        text = winapi.composition(e.winfo_toplevel().winfo_id()) if typing else ""
+        if not text:
+            self.hide()
+            return
+        try:
+            self.label.configure(text=text, font=e.cget("font"), bg=e.cget("bg"), fg=e.cget("fg"))
+            self.label.place(x=self._insert_x(), y=0, relheight=1, bordermode="ignore")
+            self.job = e.after(self.POLL_MS, self.show)
+        except tk.TclError:
+            pass
+
+
 def _finish_typing_first(widget):
     """A click in this text field finishes a half-typed Korean syllable before the
     click moves the cursor (App.finish_typing), so the syllable stays where it was typed."""

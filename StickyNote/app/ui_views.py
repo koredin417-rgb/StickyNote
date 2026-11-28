@@ -247,6 +247,7 @@ class ListView:
         self.search_entry = tk.Entry(self.search_box, textvariable=self.search, bd=0,
                                      relief="flat", highlightthickness=0, font=(UI_FONT, 10))
         self.search_entry.pack(side="left", fill="x", expand=True, ipady=px(4), padx=(0, px(6)))
+        self.search_preedit = EntryPreedit(self.search_entry)      # (Korean: the syllable being typed shows)
         self.select_btn = tk.Label(self.search_box, bd=0, cursor="hand2")     # select mode (backlog 4)
         self.select_btn.pack(side="right", padx=(0, px(6)))
         self.select_btn.bind("<ButtonRelease-1>", lambda e: self.toggle_select())
@@ -363,9 +364,12 @@ class ListView:
                 pass
 
     @perf.timed("list_refresh")
-    def refresh(self):
+    def refresh(self, keep_view=False):
+        """The list made again from the memos. ``keep_view``: where it is scrolled stays (a memo
+        edited in another note while this list is open: it must not jump to the top)."""
         c = self.nw.colors
         px = self.app.px
+        first = self.area.canvas.yview()[0] if keep_view else 0.0
         if self.day:
             self.filter_text.configure(text=tr("memos_on", day=_date_label(self.day)))
             names = " · ".join(map(texts.holiday_name, holidays.on(date.fromisoformat(self.day))))
@@ -385,6 +389,8 @@ class ListView:
             child.destroy()
         self._trash = []                    # (destroyed with the rest)
         self.bin_icons, self.cards, self.pin_icons = {}, {}, {}
+        self.checks = {}                    # (select mode: the ticks stay by id; their marks are made again)
+        self.ticked = {i for i in self.ticked if i in self.app.notes}
         self.sections, self.sort_switch = {}, None
         self._picked, self._painters = None, {}
         notes = self.memos()
@@ -417,6 +423,9 @@ class ListView:
         self._bin_badge()
         self.area.to_top()
         self._sync_window()
+        if first > 0:
+            self.area.canvas.yview_moveto(first)
+            self._sync_window()
 
     def live_cards(self) -> int:
         """How many memo cards exist now (the rest of the list is only heights)."""

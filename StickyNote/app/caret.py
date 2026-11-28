@@ -20,6 +20,8 @@ from ui_common import _mix, animate, stop_animation
 
 CARET_GLIDE_MS = 70             # the overlay eases to the new insert point this fast (A)
 CARET_BREATH = 12               # colour steps from the caret's colour to the page (B): smooth, cached
+CARET_FAST_S = 0.1              # keys closer than this (a held Backspace, fast typing): it follows at once,
+                                # no glide (a glide restarted every repeat trailed behind the text)
 CARET_IDLE_MS = 5000            # no key or click this long: it stops breathing, solid (Windows' own
                                 # caret timeout), so nothing runs while the note just sits there
 GLIDE_KEY = "caret"             # its run on the frame clock
@@ -66,7 +68,12 @@ class GlideCaret:
             f.bind(seq, lambda e, s=seq: self._forward(e, s))
         for seq in ("<Configure>", "<MouseWheel>"):
             b.bind(seq, lambda e: self.follow_soon(jump=True), add="+")
-        b.bind("<KeyPress>", lambda e: self.typed(), add="+")
+        # every key, on a binding tag of its own ahead of the text's: a key the text binds itself
+        # (<BackSpace>, <Return>, <Delete>...) replaces the text's own <KeyPress> for that key, so a
+        # held Backspace never told the caret and it stayed up to 10 characters behind (measured)
+        self._key_tag = f"glidecaret{id(self)}"
+        b.bind_class(self._key_tag, "<KeyPress>", lambda e: self.typed())
+        b.bindtags((self._key_tag,) + tuple(b.bindtags()))
 
     # -- colours
     def _tk_caret(self, on):
@@ -131,13 +138,16 @@ class GlideCaret:
         except (KeyError, tk.TclError):
             return False
 
-    def follow_soon(self, jump=False):
+    def follow_soon(self, jump=False, now=False):
+        """Follow once the key has done its work. ``now``: on a timer, not when idle (idle never
+        comes while keys keep coming: under a held key it waited until the key was let go)."""
         if self._dead:
             return
         try:
             if self._idle_job is not None:
                 self.body.after_cancel(self._idle_job)
-            self._idle_job = self.body.after_idle(lambda: (setattr(self, "_idle_job", None), self.follow(jump)))
+            run = lambda: (setattr(self, "_idle_job", None), self.follow(jump))     # noqa: E731
+            self._idle_job = self.body.after(1, run) if now else self.body.after_idle(run)
         except tk.TclError:
             pass
 
@@ -217,14 +227,20 @@ class GlideCaret:
     def typed(self):
         """A key: solid at once, breathing again after a rest; it follows where the key put it."""
         self._mouse = False
-        self._since = time.monotonic()
+        now = time.monotonic()
+        fast = now - self._since < CARET_FAST_S
+        self._since = now
         self._rest()
-        self.follow_soon()
+        self.follow_soon(jump=fast, now=fast)
 
     def close(self):
         """The window goes: no timer of its own is left behind."""
         self._hide()
         self._dead = True
+        try:
+            self.body.unbind_class(self._key_tag, "<KeyPress>")
+        except (AttributeError, tk.TclError):
+            pass
         if self._idle_job is not None:
             try:
                 self.body.after_cancel(self._idle_job)
