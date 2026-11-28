@@ -1289,7 +1289,8 @@ SETTING_ICONS = {
     "set_pin_limit": "\ue718", "set_bin_days": "\ue74d", "set_keys": "\ue765", "set_folder": "\ue8b7",
     "set_update": "\ue896", "set_rail_hide": "\ue8a0", "set_tour": "\ue897",
 }
-QUICK = ("set_language", "set_cursor", "set_motion", "set_bin_days", "set_auto_layout", "set_rail_hide")
+QUICK = ("set_language", "set_cursor", "set_motion", "set_bin_days", "set_auto_layout", "set_rail_hide",
+         "set_pin_limit")   # (the pinned count: − n + in its row, no page of its own)
 # Settings, clear cards (2026-11-28, the user's pick): every card reads on any note colour
 SET_CARD_LIFT = (0.62, 0.08)     # a card: the page mixed this far toward white (light page, dark page)
 SET_CARD_EDGE = 0.16             # ... ringed 1 px in the page mixed this far toward its ink
@@ -1300,6 +1301,9 @@ UPDATE_NOTE_LINES = 12           # the release notes on the Update page: longer 
 SETTING_COLORS = {"set_color": "memo", "set_default_color": "default", "set_theme_color": "theme"}
 SETTING_SLIDE_MS = anim.LONG     # a setting's page slides in over the list
 SETTING_SLIDE_BACK = 0.28        # ... and the list steps back this much of its width
+
+
+from settings_pages import SettingsPages  # noqa: E402  (the pages of Settings, made when opened)
 
 
 class Switch(tk.Label):
@@ -1320,7 +1324,7 @@ class Switch(tk.Label):
         self.configure(bg=bg, image=photo)
 
 
-class SettingsView:
+class SettingsView(SettingsPages):
     def __init__(self, nw: NoteWindow):
         self.nw, self.app = nw, nw.app
         px = self.app.px
@@ -1344,112 +1348,7 @@ class SettingsView:
         self.lines = []                         # thin lines under the rows
         pad = dict(padx=px(14))
 
-        def page(key):
-            """The page of one setting: its name on top, its controls, then what it does."""
-            p = tk.Frame(self.detail_area.inner, bd=0)
-            self.rows.append(p)
-            self.pages[key] = p
-            title = tk.Label(p, text=tr(key), font=(UI_BOLD, 10, "bold"), anchor="w", justify="left")
-            title.pack(fill="x", pady=(px(12), px(8)), **pad)
-            title.bind("<Configure>", lambda e, w=title: w.configure(wraplength=max(px(120), e.width)))
-            self.labels.append(title)
-            return p
-
-        self.rows, self.palettes, self.warnings = [], {}, {}
-        body = page("set_color")
-        self._palette(body, "memo", px(24), pad)
-        body = page("set_default_color")
-        self._palette(body, "default", px(24), pad)
-        body = page("set_theme_color")
-        self._palette(body, "theme", px(24), pad)
-
-        body = page("set_transparency")
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        self.alpha_unit = tk.Label(row, text="%", font=(UI_FONT, 9))
-        self.alpha_unit.pack(side="right")
-        self.alpha_box = NumberBox(row, self.app, 0, 90, self._alpha_typed)      # type the percent
-        self.alpha_box.pack(side="right", padx=(px(6), px(2)))
-        self.alpha = Slider(row, self.app, 0, 90, self._alpha_moved)
-        self.alpha.pack(side="left", fill="x", expand=True)
-
-        body = page("set_font")
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        self.font_picker = FontPicker(row, self.app, lambda fam: self.nw.set_font(family=fam))
-        self.font_picker.pack(side="left", fill="x", expand=True)
-        self.size_box = NumberBox(row, self.app, 8, 48, lambda v: self.nw.set_font(size=v))
-        self.size_box.pack(side="left", padx=(px(6), 0))
-
-        body = page("set_pin_limit")
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        self.pin_box = NumberBox(row, self.app, 0, PIN_LIMIT_MAX, self.app.set_pin_limit)
-        self.pin_box.pack(side="left")
-        self.pin_var = self.pin_box.var
-
-        body = page("set_date_format")
-        box = tk.Frame(body, bd=0)
-        box.pack(fill="x", **pad)
-        self.rows.append(box)
-        self.date_buttons = {}
-        today = date.today()
-        for i, fmt in enumerate(texts.DATE_FORMATS):     # each shows today in that format
-            b = FlatButton(box, texts.day_label(today, fmt), lambda f=fmt: self.app.set_date_format(f))
-            b.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, px(6)), pady=(0, px(4)))
-            self.date_buttons[fmt] = b
-            self.flat.append(b)
-
-        body = page("set_snap")
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        self.snap_buttons = {}
-        for gap in (None, *SNAP_GAPS):
-            b = FlatButton(row, tr("snap_off") if gap is None else f"{gap}", lambda g=gap: self.app.set_snap_gap(g))
-            b.pack(side="left", padx=(0, px(4)))
-            self.snap_buttons[gap] = b
-            self.flat.append(b)
-        self.snap_unit = tk.Label(row, text="px", font=(UI_FONT, 9))
-        self.snap_unit.pack(side="left", padx=(px(2), 0))
-
-        body = page("set_minimize")
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        self.min_buttons = {}
-        for i, style in enumerate(("bar", "fold", "sticker")):     # the default first
-            b = FlatButton(row, tr(f"min_{style}"), lambda s=style: self.app.set_minimize_style(s))
-            b.grid(row=i, column=0, sticky="w", pady=(0, px(4)))      # one a line: the names are long
-            self.min_buttons[style] = b
-            self.flat.append(b)
-
-        body = page("set_folder")              # where the memos are, and Open folder (Q8)
-        self.folder_path = tk.Label(body, text=str(self.app.store.folder), font=(UI_FONT, 9), anchor="w",
-                                    justify="left")
-        self.folder_path.pack(fill="x", pady=(0, px(6)), **pad)
-        self.folder_path.bind("<Configure>", lambda e, w=self.folder_path: w.configure(
-            wraplength=max(px(120), e.width)))
-        self.labels.append(self.folder_path)
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", **pad)
-        self.rows.append(row)
-        b = FlatButton(row, tr("open_folder"), self.app.open_folder)
-        b.pack(side="left")
-        self.flat.append(b)
-
-        self._keys_page(page("set_keys"), pad)   # every key and gesture (U1; also from ⋯)
-        self._build_update(page("set_update"), pad)
-
-        # under each setting's controls: what it does, in words (the tooltips of the old long page)
-        for key, p in self.pages.items():
-            words = tk.Label(p, text=tr(SETTING_HELP[key]), font=(UI_FONT, 9), anchor="w", justify="left")
-            words.pack(fill="x", pady=(px(12), px(16)), **pad)
-            words.bind("<Configure>", lambda e, w=words: w.configure(wraplength=max(px(120), e.width)))
-            self.muted.append(words)
+        self._init_pages()                     # (pages are made when first opened: settings_pages)
 
         # ---- the list: a row per setting with its value now, in four groups
         body = self.list_area.inner
@@ -1493,109 +1392,14 @@ class SettingsView:
         tk.Frame(body, height=px(14), bd=0).pack(fill="x")      # (room under the last card)
         self.rule = None
 
-    # -- Update: the installed version, Check, and what the last check or download says
-    def _build_update(self, body, pad):
-        """Its status part is redrawn from the app's one Updater (_sync_update, a listener of
-        it), so every note's page shows the same check."""
-        px = self.app.px
-
-        def wrapped(master, muted=False):
-            lbl = tk.Label(master, font=(UI_FONT, 9), anchor="w", justify="left")
-            lbl.bind("<Configure>", lambda e, w=lbl: w.configure(wraplength=max(px(120), e.width)))
-            (self.muted if muted else self.labels).append(lbl)
-            return lbl
-        installed = wrapped(body)
-        installed.configure(text=tr("upd_installed", v=version.VERSION))
-        installed.pack(fill="x", **pad)
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", pady=(px(8), 0), **pad)
-        self.rows.append(row)
-        self.update_check = FlatButton(row, tr("upd_check"), self.app.update_check)
-        self.update_check.pack(side="left")
-        self.flat.append(self.update_check)
-        self.update_box = tk.Frame(body, bd=0)
-        self.update_box.pack(fill="x", **pad)
-        self.rows.append(self.update_box)
-        self.update_status = wrapped(self.update_box)
-        self.update_notes = wrapped(self.update_box, muted=True)
-        self.update_buttons = tk.Frame(self.update_box, bd=0)
-        self.rows.append(self.update_buttons)
-        self.update_now = FlatButton(self.update_buttons, tr("upd_now"), self.app.update_install)
-        self.update_now.pack(side="left", padx=(0, px(6)))
-        self.update_later = FlatButton(self.update_buttons, tr("upd_later"), lambda: self.app.updater.dismiss())
-        self.update_later.pack(side="left")
-        self.flat += [self.update_now, self.update_later]
-        self.update_elsewhere = wrapped(self.update_box, muted=True)
-        self.update_elsewhere.configure(text=tr("upd_elsewhere"))
-        self._updater = self.app.updater
-        self._updater.listeners.append(self._sync_update)
-
-    def _sync_update(self):
-        u, px = self.app.updater, self.app.px
-        for w in self.update_box.winfo_children():
-            w.pack_forget()
-        release = u.release
-        status = {"checking": lambda: tr("upd_checking"), "latest": lambda: tr("upd_latest"),
-                  "error": lambda: tr(u.error, e=u.error_detail) if u.error else "",
-                  "available": lambda: tr("upd_new", v=release.version) if release else "",
-                  "downloading": lambda: tr("upd_downloading", pct=round(u.progress * 100)),
-                  "installing": lambda: tr("upd_installing")}.get(u.state, lambda: "")()
-        if status:
-            self.update_status.configure(text=status)
-            self.update_status.pack(fill="x", pady=(px(10), 0))
-        if u.state == "available" and release is not None:
-            lines = release.notes.split("\n") if release.notes else []
-            if len(lines) > UPDATE_NOTE_LINES:
-                lines = lines[:UPDATE_NOTE_LINES] + ["…"]
-            if lines:
-                self.update_notes.configure(text="\n".join(lines))
-                self.update_notes.pack(fill="x", pady=(px(4), 0))
-            if u.can_install:
-                self.update_buttons.pack(anchor="w", pady=(px(8), 0))
-            else:                               # (a run from the repo or an unzipped folder)
-                self.update_elsewhere.pack(fill="x", pady=(px(8), 0))
-        busy = u.state in ("checking", "downloading", "installing")     # Check does nothing then
-        self.update_check.configure(fg=self.nw.colors.muted if busy else self.nw.colors.fg,
-                                    cursor="" if busy else "hand2")
-
-    def _keys_page(self, body, pad):
-        """Keys: the key in a tinted chip, what it does beside it. Mouse: the gesture, what it
-        does under it (the gestures are too long to sit beside the words in a small note)."""
-        px = self.app.px
-
-        def wrap(w):
-            w.bind("<Configure>", lambda e: w.configure(wraplength=max(px(60), e.width)))
-        for head, rows in (("keys_keyboard", KEY_ROWS), ("keys_mouse", GESTURE_ROWS)):
-            cap = tk.Label(body, text=tr(head), font=(UI_FONT, 9), anchor="w")
-            cap.pack(fill="x", pady=(px(8), px(4)), **pad)
-            self.muted.append(cap)
-            for first, words in rows:
-                row = tk.Frame(body, bd=0)
-                row.pack(fill="x", pady=(0, px(6)), **pad)
-                self.rows.append(row)
-                if head == "keys_keyboard":
-                    chip = tk.Label(row, text=first, font=(UI_BOLD, 9, "bold"), padx=px(5), pady=0)
-                    chip.pack(side="left", anchor="n")
-                    self.key_chips.append(chip)
-                    text = tk.Label(row, text=tr(words), font=(UI_FONT, 9), anchor="w", justify="left")
-                    text.pack(side="left", fill="x", expand=True, padx=(px(8), 0))
-                    self.labels.append(text)
-                else:
-                    name = tk.Label(row, text=tr(first), font=(UI_BOLD, 9, "bold"), anchor="w", justify="left")
-                    name.pack(fill="x")
-                    wrap(name)
-                    self.labels.append(name)
-                    text = tk.Label(row, text=tr(words), font=(UI_FONT, 9), anchor="w", justify="left")
-                    text.pack(fill="x")
-                    self.muted.append(text)
-                wrap(text)
-
     def release(self):
         """The window closes: the Updater must not keep this page (and its window) alive."""
-        try:
-            self._updater.listeners.remove(self._sync_update)
-        except ValueError:
-            pass
+        updater = self.__dict__.get("_updater")
+        if updater is not None:
+            try:
+                updater.listeners.remove(self._sync_update)
+            except ValueError:
+                pass
 
     # -- the list and opening one setting
     def _list_row(self, card, key):
@@ -1694,6 +1498,9 @@ class SettingsView:
         if key == "set_rail_hide":
             self.rail_switch = Switch(row, self.app, self.app.set_rail_hide)
             return self.rail_switch
+        if key == "set_pin_limit":
+            self.pin_step = Stepper(row, self.app, 0, PIN_LIMIT_MAX, self.app.set_pin_limit)
+            return self.pin_step
         seg = tk.Frame(row, bd=0, padx=px(2), pady=px(2))
         self.segs.append(seg)
         options = {
@@ -1823,9 +1630,11 @@ class SettingsView:
             self.nw.show_home()
             self.app.start_tour(replay=True)
             return
-        if self.opened is not None or key not in self.pages:
+        if self.opened is not None or not self.has_page(key):
             return
+        self.pages[key]                         # (made now, the first time)
         self.opened = key
+        self.nw._draw_row()                     # (the top bar shows its name)
         for k, p in self.pages.items():
             if k != key:
                 p.pack_forget()
@@ -1861,6 +1670,7 @@ class SettingsView:
         if self.opened is None:
             return False
         self.opened = None
+        self.nw._draw_row()
         self._sync_rows()
         lst, det = self.list_area.canvas, self.detail_area.canvas
         u = self._page_u if animated else 0.0
@@ -1888,39 +1698,6 @@ class SettingsView:
         (self.detail_area if self.opened else self.list_area).wheel(event)
 
     # -- palettes: 10 colors and 4 personal ones
-    def _palette(self, body, which, size, pad):
-        px = self.app.px
-        box = tk.Frame(body, bd=0)
-        box.pack(fill="x", **pad)
-        self.rows.append(box)
-        gap = px(5) if size > px(20) else px(4)
-        basic, custom = [], []
-        for i, (name, color) in enumerate(PALETTE):
-            cv = tk.Canvas(box, width=size, height=size, highlightthickness=0, bd=0, cursor="hand2")
-            cv.grid(row=i // 5, column=i % 5, padx=(0, gap), pady=(0, gap))
-            cv.bind("<ButtonRelease-1>", lambda e, c=color: self._pick(which, c))
-            Tooltip(cv, tr(f"color_{name.lower()}"))
-            basic.append((cv, color))
-        box.grid_columnconfigure(5, minsize=px(6))
-        for i in range(CUSTOM_COLORS):
-            cv = tk.Canvas(box, width=size, height=size, highlightthickness=0, bd=0, cursor="hand2")
-            cv.grid(row=i // 2, column=6 + i % 2, padx=(0, gap), pady=(0, gap))
-            cv.bind("<ButtonRelease-1>", lambda e, i=i: self.custom_click(which, i))
-            cv.bind("<Button-3>", lambda e, i=i: self._custom_menu(e, which, i))
-            Tooltip(cv, tr("tip_custom_color"))
-            custom.append(cv)
-        self.palettes[which] = (basic, custom)
-        # under it, for a color too strong for text: what happens (a pale page) and a way to keep it solid
-        warn = tk.Frame(body, bd=0)
-        self.rows.append(warn)
-        words = tk.Label(warn, font=(UI_FONT, 9), anchor="w", justify="left")
-        words.pack(fill="x")
-        words.bind("<Configure>", lambda e, w=words: w.configure(wraplength=max(px(120), e.width)))
-        switch = FlatButton(warn, tr("keep_solid"), lambda: self._toggle_solid(which))
-        switch.pack(anchor="w", pady=(px(3), px(2)))
-        self.flat.append(switch)
-        self.warnings[which] = (warn, words, switch, Tooltip(words, ""), box, pad)
-
     def _sync_warning(self, which):
         warn, words, switch, tip, box, pad = self.warnings[which]
         color = self._current(which)
@@ -2001,42 +1778,17 @@ class SettingsView:
                 self._draw_empty(cv, add=i == len(colors))
         self._sync_warning(which)
 
-    def _draw_empty(self, cv, add):
-        """An empty round slot (smooth, as the swatches); the next one to fill has a + in it."""
-        c = self.nw.colors
-        cv.delete("all")
-        size = int(cv.cget("width"))
-        cv._photo = dot_photo(self.app, c.bg, c.muted if add else c.border, size, 1)
-        cv.create_image(size // 2, size // 2, image=cv._photo)
-        if add:
-            m, arm = size // 2, max(3, size // 5)
-            cv.create_line(m - arm, m, m + arm + 1, m, fill=c.muted)
-            cv.create_line(m, m - arm, m, m + arm + 1, fill=c.muted)
-        cv.configure(cursor="hand2" if add else "")
-
     def sync(self):
-        n, p = self.nw.note, self.nw.pad
         self._syncing = True
         try:
-            for which in self.palettes:
-                self._sync_palette(which)
-            self.alpha.set(p.transparency)
-            self.alpha_box.set(p.transparency)
-            self.font_picker.set(n.font_family)
-            self.size_box.set(n.font_size)
-            self.pin_box.set(self.app.prefs.pin_limit)
             c = self.nw.colors
             prefs = self.app.prefs
             k = self._card_colors()
-            well = self._well(c, k)             # (on a card: its well; on a page: the page's)
-            for buttons, now, track in ((self.lang_buttons, texts.language(), well),
-                                        (self.cursor_buttons, prefs.cursor_color, well),
-                                        (self.bin_buttons, prefs.bin_days, well),
-                                        (self.motion_buttons, self.app.clock.mode, well),
-                                        (self.date_buttons, texts.date_format(), c.well),
-                                        (self.snap_buttons, prefs.snap_gap, c.well),
-                                        (self.min_buttons, prefs.minimize_style, c.well)):
-                self._paint_choices(buttons, now, track)
+            well = self._well(c, k)
+            for buttons, now in ((self.lang_buttons, texts.language()), (self.cursor_buttons, prefs.cursor_color),
+                                 (self.bin_buttons, prefs.bin_days), (self.motion_buttons, self.app.clock.mode)):
+                self._paint_choices(buttons, now, well)
+            self.pin_step.set(prefs.pin_limit)
             accent = readable(self.frame, accent_color(self.frame, self.app.theme_colors().color, k.rest),
                               k.rest, MARK_CONTRAST)    # on: the theme's colour (the ink read as off)
             white = contrast(self.frame, accent, "#FFFFFF") >= MARK_CONTRAST     # (Windows' own: a white knob
@@ -2045,25 +1797,10 @@ class SettingsView:
             for switch, on in ((self.auto_switch, prefs.auto_layout), (self.rail_switch, bool(prefs.rail_hide))):
                 switch.set(on, ink=accent if on else off, pale=knob if on else k.rest, bg=k.rest)
             self._sync_rows()
-            self._sync_update()
+            self._sync_pages()
             self.frame.after_idle(self._refit_quick)     # (a bold choice is wider: it may not fit now)
         finally:
             self._syncing = False
-
-    def _draw_swatch(self, cv, color, selected):
-        """A round swatch (smooth, like the colour menu's): the colour itself, never its pale page,
-        ringed so it shows on its own colour; the one in use has a tick and a stronger ring."""
-        c = Colors.of(cv, color, solid=True)
-        page = self.nw.colors.bg
-        cv.delete("all")
-        size = int(cv.cget("width"))
-        ring = readable(cv, c.fg if selected else c.border, page, MARK_CONTRAST if selected else 1.4)
-        cv._photo = dot_photo(self.app, color, ring, size, 2 if selected else 1,
-                              check=c.fg if selected else None)
-        cv.create_image(size // 2, size // 2, image=cv._photo)
-        if selected:
-            cv.create_text(size / 2, size / 2, text=GLYPH["check"], fill=c.fg,
-                           font=(self.app.icon_font, 8 if size > self.app.px(20) else 7))
 
     def recolor(self, c):
         self.frame.configure(bg=c.bg)
@@ -2075,8 +1812,6 @@ class SettingsView:
             lbl.configure(bg=c.bg, fg=c.fg)
         for lbl in self.muted:
             lbl.configure(bg=c.bg, fg=c.muted_text)
-        for chip in self.key_chips:
-            chip.configure(bg=c.hover, fg=c.fg)
         for line in self.lines:
             line.configure(bg=c.line)
         k = self._card_colors()
@@ -2105,19 +1840,8 @@ class SettingsView:
             seg.configure(bg=self._well(c, k))
         for b in self.flat:
             b.recolor(c)
-        for basic, custom in self.palettes.values():
-            for cv in [cv for cv, _ in basic] + custom:
-                cv.configure(bg=c.bg)
-        for _warn, words, *_rest in self.warnings.values():
-            words.configure(bg=c.bg, fg=c.muted_text)
-        self.alpha_unit.configure(bg=c.bg, fg=c.muted_text)
-        self.snap_unit.configure(bg=c.bg, fg=c.muted_text)
-        self.alpha.recolor(c)
-        for box in (self.alpha_box, self.size_box, self.pin_box):
-            box.recolor(c)
-        self.font_picker.recolor(c)
-        if self.rule is not None:
-            self.rule.configure(bg=c.border)
+        self.pin_step.recolor(k.rest, c.fg, readable(self.frame, c.muted, k.rest, MARK_CONTRAST), k.edge, k.lit)
+        self._recolor_pages(c, k)
         self.sync()
 
     def _alpha_moved(self, value):

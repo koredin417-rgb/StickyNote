@@ -816,6 +816,99 @@ def thumb_caps(app, w, fill, bg):
     return caps
 
 
+def hero_photo(app, glyph, ink, fill, ring, size):
+    """A setting page's icon: ``glyph`` in ``ink`` on a round ``fill`` ringed in ``ring``, ``size`` px
+    (smooth: drawn 8x and shrunk; cached by its colours and size). None without the icon font."""
+    if not app.icons.available:
+        return None
+    key = ("hero", glyph, ink, fill, ring, size)
+    photo = app.icons._photos.get(key)
+    if photo is None:
+        s, big = 8, size * 8
+        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.ellipse((0, 0, big - 1, big - 1), fill=ImageColor.getrgb(ring))
+        d.ellipse((s, s, big - 1 - s, big - 1 - s), fill=ImageColor.getrgb(fill))
+        img = img.resize((size, size), Image.LANCZOS)
+        box = max(8, round(size * 0.5))
+        mark = Image.new("RGBA", (box, box), ImageColor.getrgb(ink)[:3] + (0,))
+        mark.putalpha(app.icons.mask(glyph, box))
+        img.alpha_composite(mark, ((size - box) // 2, (size - box) // 2))
+        photo = app.icons._photos[key] = ImageTk.PhotoImage(img, master=app.icons.root)
+    return photo
+
+
+def keycap_photo(app, text, ink, fill, edge, size_px):
+    """A key on the keyboard (the Keys page): ``text`` in Pretendard Bold on a small rounded cap of
+    ``fill`` with a 1 px ``edge`` and a 2 px lower lip, ``size_px`` text. Smooth, cached."""
+    key = ("keycap", text, ink, fill, edge, size_px)
+    photo = app.icons._photos.get(key)
+    if photo is None:
+        font = ImageFont.truetype(str(FONT_DIR / "Pretendard-Bold.ttf"), size_px)
+        x0, y0, x1, y1 = font.getbbox(text)
+        pad_x, pad_y, lip = round(size_px * 0.55), round(size_px * 0.32), max(1, round(size_px / 6))
+        w = max(x1 - x0 + 2 * pad_x, round(size_px * 1.7))
+        h = round(size_px * 1.05) + 2 * pad_y + lip
+        s = 8
+        big = Image.new("RGBA", (w * s, h * s), (0, 0, 0, 0))
+        d = ImageDraw.Draw(big)
+        r = round(size_px * 0.35) * s
+        d.rounded_rectangle((0, 0, w * s - 1, h * s - 1), radius=r, fill=ImageColor.getrgb(edge))
+        d.rounded_rectangle((s, s, w * s - 1 - s, (h - lip) * s - 1 - s), radius=r - s, fill=ImageColor.getrgb(fill))
+        img = big.reduce(s)
+        text_h = round(size_px * 1.05) + 2 * pad_y
+        ImageDraw.Draw(img).text(((w - (x1 - x0)) / 2 - x0, (text_h - (y1 - y0)) / 2 - y0), text, font=font,
+                                 fill=ImageColor.getrgb(ink))
+        photo = app.icons._photos[key] = ImageTk.PhotoImage(img, master=app.icons.root)
+    return photo
+
+
+class Stepper(tk.Frame):
+    """− value + (the pinned count in the Settings list, the font size): a click steps by one
+    between ``lo`` and ``hi`` and calls ``command(value)``; the wheel steps too."""
+
+    def __init__(self, master, app, lo, hi, command):
+        super().__init__(master, bd=0, highlightthickness=1)
+        self.app, self.lo, self.hi, self.command, self.value = app, lo, hi, command, lo
+        px = app.px
+        self.minus = tk.Label(self, text="−", font=(UI_FONT, 10), width=2, cursor="hand2")
+        self.num = tk.Label(self, font=ui_font(9, True), width=3)
+        self.plus = tk.Label(self, text="+", font=(UI_FONT, 10), width=2, cursor="hand2")
+        for w in (self.minus, self.num, self.plus):
+            w.pack(side="left", ipady=px(1))
+        self.minus.bind("<ButtonRelease-1>", lambda e: self.step(-1))
+        self.plus.bind("<ButtonRelease-1>", lambda e: self.step(1))
+        for w in (self, self.minus, self.num, self.plus):
+            w.bind("<MouseWheel>", lambda e: (self.step(1 if e.delta > 0 else -1), "break")[1])
+        self._colors = None
+
+    def set(self, value):
+        self.value = max(self.lo, min(self.hi, int(value)))
+        self.num.configure(text=str(self.value))
+        if self._colors is not None:
+            self._paint()
+
+    def step(self, d):
+        v = max(self.lo, min(self.hi, self.value + d))
+        if v != self.value:
+            self.set(v)
+            self.command(v)
+
+    def recolor(self, bg, fg, muted, edge, hover):
+        self._colors = (bg, fg, muted, edge, hover)
+        self.configure(bg=bg, highlightbackground=edge, highlightcolor=edge)
+        self._paint()
+        for w in (self.minus, self.plus):
+            w.bind("<Enter>", lambda e, w=w: w.configure(bg=self._colors[4]))
+            w.bind("<Leave>", lambda e, w=w: w.configure(bg=self._colors[0]))
+
+    def _paint(self):
+        bg, fg, muted, _edge, _hover = self._colors
+        self.num.configure(bg=bg, fg=fg)
+        self.minus.configure(bg=bg, fg=muted if self.value <= self.lo else fg)
+        self.plus.configure(bg=bg, fg=muted if self.value >= self.hi else fg)
+
+
 def dot_photo(app, fill, ring, size, ring_w=1, check=None):
     """A smooth round swatch ``size`` px (drawn 8x and shrunk: no jagged edge), ringed ``ring_w`` px
     in ``ring``; ``check``: a tick in that colour on it. Cached by its colours and size."""

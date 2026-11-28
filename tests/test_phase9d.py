@@ -536,6 +536,79 @@ class ClearCardsTest(Case):
         self.assertEqual((first_danger, second_danger), (False, True))
 
 
+class SettingsPagesTest(Case):
+    """The pages redesign (2026-11-28, from the mockups the user approved): one shape for every page,
+    made when first opened; the pinned count is a stepper in the list."""
+
+    def open(self):
+        self.nw.show_settings()
+        self.settle()
+        return self.nw.settings_view
+
+    def test_pages_are_made_when_opened(self):
+        sv = self.open()
+        self.assertEqual(dict(sv.pages), {})                     # the list only, at first
+        sv.open("set_font", animated=False)
+        self.settle(0.1)
+        self.assertEqual(set(dict(sv.pages)), {"set_font"})
+
+    def test_every_page_has_its_icon_title_and_a_card(self):
+        import settings_pages
+        sv = self.open()
+        cards = len(sv.cards)
+        for key in settings_pages.PAGE_KEYS:
+            sv.open(key, animated=False)
+            self.settle(0.05)
+            icon, title, words = sv.heroes[key]
+            self.assertTrue(str(icon.cget("image")), key)
+            self.assertTrue(title.cget("text").startswith(tr(key)), key)
+            self.assertTrue(words.cget("text"), key)
+            self.assertGreater(len(sv.cards), cards, key)
+            cards = len(sv.cards)
+            sv.close(animated=False)
+        self.assertFalse(sv.has_page("set_pin_limit"))           # (no page: a stepper in its row)
+
+    def test_pinned_count_steps_in_its_row(self):
+        sv = self.open()
+        limit = self.app.prefs.pin_limit
+        sv.pin_step.plus.event_generate("<ButtonRelease-1>")
+        self.settle(0.05)
+        self.assertEqual(self.app.prefs.pin_limit, min(limit + 1, sv.pin_step.hi))
+        self.assertEqual(sv.pin_step.num.cget("text"), str(self.app.prefs.pin_limit))
+
+    def test_top_bar_names_the_open_page(self):
+        sv, nw = self.open(), self.nw
+        sv.open("set_snap", animated=False)
+        self.settle(0.05)
+        shown = [nw.row.itemcget(i, "text") for i in nw.row.find_withtag("text")]
+        self.assertIn(tr("set_snap").split(" (")[0], shown[0])
+        sv.close(animated=False)
+        self.settle(0.05)
+        shown = [nw.row.itemcget(i, "text") for i in nw.row.find_withtag("text")]
+        self.assertEqual(shown[0], tr("title_settings"))
+
+    def test_minimize_rows_choose(self):
+        sv = self.open()
+        sv.open("set_minimize", animated=False)
+        self.settle(0.05)
+        row, widgets, check = sv.min_rows["sticker"]
+        row.event_generate("<ButtonRelease-1>")
+        self.settle(0.1)
+        self.assertEqual(self.app.prefs.minimize_style, "sticker")
+        self.assertTrue(str(check.cget("image")))
+        self.assertFalse(str(sv.min_rows["bar"][2].cget("image")))
+
+    def test_transparency_preview_follows(self):
+        sv = self.open()
+        sv.open("set_transparency", animated=False)
+        self.settle(0.05)
+        before = sv._alpha_preview(self.nw.pad.transparency)
+        self.app.set_transparency(40)
+        self.settle(0.1)
+        self.assertEqual(sv.alpha_box.var.get(), "40")
+        self.assertIsNot(sv._alpha_preview(40), before)
+
+
 class ChipHoverTest(Case):
     def test_chip_stronger_under_hover(self):
         nw = self.nw

@@ -254,9 +254,10 @@ class SettingsMixin:
         for w in self.windows.values():
             w.pad.transparency = value
             w._apply_alpha()
-            if w is not source and w.view == "settings":    # the other notes' sliders follow
-                w.settings_view.alpha.set(value)
-                w.settings_view.alpha_box.set(value)
+            sv = w._settings_view
+            if w is not source and w.view == "settings" and sv is not None and "set_transparency" in sv.pages:
+                sv.alpha.set(value)                         # the other notes' sliders follow
+                sv.alpha_box.set(value)
         self.request_save()
 
     def set_note_size(self, nw: NoteWindow):

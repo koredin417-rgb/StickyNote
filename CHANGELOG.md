@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.4 — 2026-11-28
+
+Every Settings page redesigned, from the mockups: one shape, clearer controls, live previews.
+
+### Changed
+- **Settings pages.** Each page has its name in the top bar (with "설정" beside it), a round icon
+  and a one-line description on top, its controls in a clear card, and a preview where the setting
+  changes how something looks.
+  - Colours: round swatches in a card, the chosen colour's name in the title, "내 색" on its own
+    row, a preview note (theme colour: today's mark and the text cursor).
+  - Transparency: marks at 0 · 25 · 50 · 75 · 90 and a note fading over a desktop as you drag.
+  - Font: − size + and a sample in the chosen font and size.
+  - Date format: one row per format with today in it and a ✓, and a list card showing it.
+  - Snap: two notes drawn the chosen gap apart.
+  - Minimize: three options, each with a small drawing and one line.
+  - Memo folder: the path cut in the middle (full path on hover), Open folder and Copy path, and
+    how many memos, pictures and days of backups it holds.
+  - Keys and gestures: cards by purpose, each key drawn as a keycap.
+  - Update: the version large, its state with an icon, when it was last checked.
+- **Pinned count** is a − n + stepper in the Settings list (no page of its own).
+- Settings opens faster and holds less: a page is made the first time it is opened.
+
 ## 1.2.3 — 2026-11-28
 
 Typing fixes: the caret keeps up with held keys, open lists follow edits, Korean shows in

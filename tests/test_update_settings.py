@@ -81,7 +81,7 @@ class UpdateSettingsTest(unittest.TestCase):
         nw.show_settings()
         pump(self.app, timeout=0.2)
         self.assertEqual(nw.settings_view.list_rows["set_update"][2].cget("text"), f"v{version.VERSION}")
-        self.assertEqual(version.VERSION, "1.2.3")
+        self.assertEqual(version.VERSION, "1.2.4")
 
     def test_check_shows_new_version(self):
         sv = self.open_page(self.start())
