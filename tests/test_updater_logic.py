@@ -21,7 +21,7 @@ class UpdaterLogicTest(unittest.TestCase):
         self.assertGreater(parse_version("1.10.0"), parse_version("1.9.0"))
 
     def test_version_constant_parses(self):
-        self.assertEqual(parse_version(version.VERSION), (1, 2, 0))
+        self.assertEqual(parse_version(version.VERSION), (1, 2, 2))
 
     def test_pick_newer_release(self):
         r = pick_release(release("v1.2.0", digest="sha256:ab"), "1.1.0")

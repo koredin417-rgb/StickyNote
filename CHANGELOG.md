@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.2.2 — 2026-11-28
+
+Settings gets clearer cards, and the docked calendar makes room wherever it is. (1.2.1 was
+published with the 1.2.0 file by mistake; the updater refused it. 1.2.2 replaces it.)
 
 ### Changed
 - **Settings, clear cards.** Cards read on every note colour (a set lift off the page and a fine
