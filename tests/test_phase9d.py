@@ -104,8 +104,8 @@ class SettingsCardsTest(Case):
 
     def test_rows_on_cards_with_icons(self):
         sv, nw = self.open(), self.nw
-        k = card_colors(nw.frame, nw.note.color, nw.colors.bg)
-        self.assertEqual(len(sv.cards), 4)
+        k = sv._card_colors()                           # (clear cards: Settings' own lift)
+        self.assertEqual(len(sv.cards), 5)              # the four groups and the Memos card
         for key, (row, name, _value, _dot, _chev) in sv.list_rows.items():
             self.assertIn(row.master, [card for card, _strips in sv.cards], key)
             self.assertEqual(str(row.cget("bg")).upper(), k.rest.upper(), key)
@@ -362,6 +362,121 @@ class WideReviewTest(SettingsSizeTest):
                 self.assertTrue(nw._wide)
                 self.assertEqual(self.box()[2:], wide[2:])
 
+    def test_its_calendar_moves_beside_the_settings_window(self):
+        """The user: in Settings the bigger window sat on its own docked calendar, and expanding the
+        calendar made no room. It moves beside the window seen (others stay), and comes back."""
+        nw = self.small(300, 200)
+        nw.toggle_calendar()
+        self.settle(0.6)
+        cal = nw.calendar
+        home = tuple(cal.target_box)
+        nw.show_settings()
+        self.settle(0.8)
+        self.assertTrue(nw._wide)
+        x, y, w, h = self.box()
+
+        def clear_of_window():
+            b = cal.target_box
+            return min(b[2], x + w) <= max(b[0], x) or min(b[3], y + h) <= max(b[1], y)
+        self.assertTrue(clear_of_window(), (cal.target_box, self.box()))
+        cal.toggle_expand()
+        self.settle(1.0)
+        self.assertTrue(cal.expanded)
+        self.assertTrue(clear_of_window(), (cal.target_box, self.box()))
+        self.assertEqual(self.box(), (x, y, w, h))                  # (Settings' window as it was)
+        cal.toggle_expand()
+        self.settle(1.0)
+        nw.go_back()
+        self.settle(1.0)
+        self.assertEqual(tuple(cal.target_box), home)               # back beside the note itself
+
+    def test_bottom_corner_calendar_comes_back_beside_it(self):
+        """The corners check (2026-11-28): bottom left, expanded in Settings, then Back: it stays big on its
+        side, beside the note (the pair rises to make room), never hopping above it or standing off;
+        back to mini, both are where they were."""
+        nw, px = self.nw, self.app.px
+        nw.set_size(px(MIN_W), px(MIN_H) + px(80))
+        self.settle()
+        area = self.app.area_of(_pad_box(nw.pad))
+        nw.win.geometry(f"+{area[0] + px(8)}+{area[3] - px(8) - nw.pad.height}")
+        self.settle()
+        nw.toggle_calendar()
+        self.settle(0.6)
+        cal = nw.calendar
+        home, side = tuple(cal.target_box), nw.pad.calendar_side
+        nw.show_settings()
+        self.settle(0.8)
+        cal.toggle_expand()
+        self.settle(1.0)
+        nw.go_back()
+        self.settle(1.2)
+        self.assertEqual(nw.pad.calendar_side, side)
+        self.assertTrue(cal.expanded)
+        b, n = tuple(cal.target_box), _pad_box(nw.pad)
+        self.assertEqual(b[0], n[2] + self.app._gap())              # docked against it, top-aligned
+        self.assertEqual(b[1], n[1])
+        self.assertLessEqual(b[3], area[3])                         # on the screen
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertEqual(tuple(cal.target_box), home)
+
+    def test_expanding_near_the_bottom_makes_room(self):
+        """The user: expanding the calendar in a corner was blocked (no room below on its side: it
+        stayed mini). The pair rises just enough; back to mini, both come down where they were."""
+        nw, px = self.nw, self.app.px
+        nw.set_size(px(MIN_W), px(MIN_H) + px(80))
+        self.settle()
+        area = self.app.area_of(_pad_box(nw.pad))
+        nw.win.geometry(f"+{area[0] + px(8)}+{area[3] - px(8) - nw.pad.height}")
+        self.settle()
+        nw.toggle_calendar()
+        self.settle(0.6)
+        cal = nw.calendar
+        note0, cal0 = _pad_box(nw.pad), tuple(cal.target_box)
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertTrue(cal.expanded)
+        n, b = _pad_box(nw.pad), tuple(cal.target_box)
+        self.assertLess(n[1], note0[1])                         # it rose
+        self.assertLessEqual(b[3], area[3])                     # the big calendar on the screen
+        self.assertEqual(b[1], n[1])                            # docked, top-aligned
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertEqual((_pad_box(nw.pad), tuple(cal.target_box)), (note0, cal0))
+
+    def test_expanding_by_the_left_edge_makes_room(self):
+        """The user's recording: the calendar docked on the left of a note near the screen's left edge
+        did not expand (no room for big there). The pair slides in, at home and in Settings."""
+        nw, px = self.nw, self.app.px
+        nw.set_size(px(MIN_W), px(MIN_H) + px(110))
+        self.settle()
+        area = self.app.area_of(_pad_box(nw.pad))
+        nw.win.geometry(f"+{area[0] + px(240)}+{area[1] + px(10)}")
+        self.settle()
+        nw.pad.calendar_side = "left"
+        nw.toggle_calendar()
+        self.settle(0.6)
+        cal = nw.calendar
+        self.assertEqual(nw.pad.calendar_side, "left")
+        note0, cal0 = _pad_box(nw.pad), tuple(cal.target_box)
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertTrue(cal.expanded)
+        self.assertGreaterEqual(cal.target_box[0], area[0])
+        self.assertEqual(cal.target_box[2] + self.app._gap(), _pad_box(nw.pad)[0])   # docked on its left
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertEqual((_pad_box(nw.pad), tuple(cal.target_box)), (note0, cal0))
+        nw.show_settings()                              # in Settings: its window slides in instead
+        self.settle(0.8)
+        cal.toggle_expand()
+        self.settle(1.2)
+        self.assertTrue(cal.expanded)
+        x, y, w, h = self.box()
+        self.assertGreaterEqual(cal.target_box[0], area[0])
+        self.assertEqual(cal.target_box[2] + self.app._gap(), x)
+        self.assertEqual(_pad_box(nw.pad), note0)       # (the note's own place is kept)
+
     def test_folded_note_widens_after_unfolding(self):
         nw = self.small()
         nw.toggle_collapse(instant=True)
@@ -384,6 +499,41 @@ class WideReviewTest(SettingsSizeTest):
         self.settle()
         x0, y0, x1, y1 = _pad_box(nw.pad)
         self.assertIn((x1 - x0, y1 - y0), sizes)
+
+
+class ClearCardsTest(Case):
+    """Settings, clear cards (the user's pick, 2026-11-28): cards read on a pale note, the chosen choice
+    is a raised chip, a switch that is on takes the theme's colour, the memo actions are rows."""
+
+    def open(self):
+        self.nw.show_settings()
+        self.settle()
+        return self.nw.settings_view
+
+    def test_cards_read_on_a_pale_note(self):
+        from ui_common import contrast
+        for color in ("#FFF4A3", "#FFFFFF", "#2E2E2E"):
+            self.nw.set_color(color)
+            sv = self.open()
+            k = sv._card_colors()
+            card = sv.cards[0][0]
+            self.assertEqual(int(card.cget("highlightthickness")), self.app.px(1))
+            self.assertGreaterEqual(contrast(self.nw.win, k.edge, self.nw.colors.bg), 1.2, color)
+            self.nw.go_back()
+            self.settle()
+
+    def test_chosen_choice_is_raised(self):
+        sv = self.open()
+        chosen = sv.motion_buttons[self.app.clock.mode]
+        other = next(b for m, b in sv.motion_buttons.items() if m != self.app.clock.mode)
+        self.assertNotEqual(str(chosen.cget("bg")), str(other.cget("bg")))
+        self.assertNotEqual(str(chosen.cget("highlightbackground")), str(chosen.cget("bg")))   # (its edge)
+
+    def test_memo_actions_are_rows(self):
+        sv = self.open()
+        self.assertEqual(len(sv.action_rows), 2)
+        (_parts, _glyph, first_danger), (_parts2, _glyph2, second_danger) = sv.action_rows
+        self.assertEqual((first_danger, second_danger), (False, True))
 
 
 class ChipHoverTest(Case):

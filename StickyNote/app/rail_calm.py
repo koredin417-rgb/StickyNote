@@ -232,7 +232,7 @@ class CalmRail:
             return
         k0 = top.k
         ms = RAIL_SHOW_MS if hidden else RAIL_HIDE_MS   # (back the way it came: that direction's pace)
-        animate(top.cv, "slide", max(1, round(ms * k0)), lambda t: top.step(k0 * (1 - t)),
+        animate(top.cv, "slide", max(1, round(ms * k0)), lambda t: top.step and top.step(k0 * (1 - t)),
                 lambda: self._fade_off(top), ease=lambda t: t, kind="move")
 
     def _shot(self):
@@ -364,6 +364,9 @@ class CalmRail:
         cover, self._cover = self._cover, None
         if cover is not None:
             stop_animation(cover, "alpha")
+            cv = getattr(cover, "cv", None)
+            if cv is not None:              # its slide (or a turn back) stops too: it would call a step
+                stop_animation(cv, "slide")     # let go of below (error.log, 12:52)
             pending = getattr(cover, "relayout", None)
             if pending is not None and not self.nw._closing:    # cut short mid-slide (a drag, a minimize):
                 cover.relayout = None                           # the note laid out as the rail now is

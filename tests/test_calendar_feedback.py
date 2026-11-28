@@ -47,8 +47,9 @@ class CalendarEdgeTest(unittest.TestCase):
             self.assertEqual(min(abs(b[1] - note[3]), abs(note[1] - b[3])), gap, (note, b))
 
     def test_big_in_a_corner_stays_docked(self):
-        # no side has room for the big view: the click keeps it mini, beside its note (it used to
-        # undock to a free spot elsewhere on the screen and stop following its note)
+        # bottom right, no room below for the big view: the pair rises to make room (the user: "expanding
+        # in a corner was blocked", 2026-11-28); it stays docked beside its note (it used to undock to a
+        # free spot elsewhere on the screen and stop following its note)
         p = self.nw.pad
         self.put(1920 - p.width - 10, 1040 - p.height - 10)
         self.nw.toggle_calendar()
@@ -58,7 +59,7 @@ class CalendarEdgeTest(unittest.TestCase):
         cal._click_view_now("big")
         self.settle()
         self.assert_docked_beside()
-        self.assertFalse(cal.expanded)
+        self.assertTrue(cal.expanded)
         self.put(400, 300)                              # it still goes along with its note
         self.assert_docked_beside()
 
@@ -76,15 +77,19 @@ class CalendarEdgeTest(unittest.TestCase):
 
     def test_big_without_room_keeps_its_side(self):
         # "it moves down": a view switch must not hop sides (plan_dock's keep); big has no room on
-        # the right, so it stays mini, on the right
+        # the right: the pair slides left to make room (the user, 2026-11-28: it was blocked), still
+        # on the right
         cal = self.beside_right_with_room(300)
         lw, _lh = cal._least_for("big")
         self.assertGreater(lw, 300 - self.app._gap())   # (big's least really does not fit there)
+        x0 = self.nw.pad.x
         cal._click_view_now("big")
         self.settle()
         self.assertEqual(self.nw.pad.calendar_side, "right")
         self.assert_docked_beside()
-        self.assertFalse(cal.expanded)
+        self.assertTrue(cal.expanded)
+        self.assertLess(self.nw.pad.x, x0)              # (it slid in)
+        self.assertLessEqual(cal.target_box[2], self.app.usable()[0][2])
 
     def test_big_with_some_room_fits_its_side(self):
         # room for big's least but not its full size: big, on the same side, no wider than the room

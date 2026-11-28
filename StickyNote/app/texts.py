@@ -429,6 +429,7 @@ TEXTS = {
     "grp_look": ("모양 (모든 노트)", "Look (every note)"),
     "grp_place": ("배치", "Arrangement"),
     "grp_general": ("일반", "General"),
+    "grp_memos": ("메모", "Memos"),
     "help_color": ("지금 보고 있는 메모의 색이에요. 다른 노트는 바뀌지 않아요.",
                    "The color of the memo shown here. Other notes keep theirs."),
     "help_font": ("이 메모의 글꼴과 글자 크기예요.", "This memo's font and text size."),

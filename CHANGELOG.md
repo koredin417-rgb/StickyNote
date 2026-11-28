@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Settings, clear cards.** Cards read on every note colour (a set lift off the page and a fine
+  edge); section captions are semibold; colour rows show a smooth round dot (it was a hollow
+  square that looked like a checkbox); the palette's swatches are round, the chosen one ticked;
+  the choice in use is a raised chip; a switch that is on takes the theme's colour with a white
+  knob, off is a quiet ring; Export and Move to the bin are rows on a Memos card.
+
+### Fixed
+- In Settings, a small note's bigger window no longer sits on its own docked calendar: the
+  calendar moves beside the window (other notes stay put), expanding it makes room there, and it
+  comes back when Settings closes.
+- Expanding a docked calendar by a screen edge or in a corner did nothing (no room for the big
+  view on its side). The note and its calendar now slide in just far enough, keeping the side,
+  and slide back when it goes back to mini; in Settings its bigger window slides instead.
+- A rail slide's picture removed mid-slide could raise an error (seen in error.log).
+- Update check: with no published release yet (only pre-releases or drafts), it says you are up
+  to date instead of "Couldn't read GitHub's reply".
+
 ## 1.2.0 — 2026-11-28
 
 A UI/UX overhaul: calmer notes, smoother motion, a clearer Settings and list, a first-start
@@ -47,8 +67,6 @@ tour, and a lighter app. Notes and settings from 1.1 carry over as they are.
 - Dragging linked notes left a neighbour's rail slide picture behind on screen.
 - The resize grip no longer shows a second copy while the rail slides.
 - A rail slide cut short (a drag, minimize, close) now leaves the note laid out correctly.
-- Update check: with no published release yet (only pre-releases or drafts), it says you are up
-  to date instead of "Couldn't read GitHub's reply".
 
 ### Lighter
 - About 26 % less memory with 20 notes (68 → 50 MB): screenshots used for slides are no longer

@@ -536,7 +536,7 @@ class CalendarPopup:
         pad = self.nw.pad
         w, h = b[2] - b[0], b[3] - b[1]
         if self.docked:
-            note = _pad_box(pad)
+            note = tuple(self.nw.dock_box())        # (Settings' bigger window: beside it, not under it)
             x, y = calgeom.spot_box(note, pad.calendar_side or _dock_side(note, b), w, h, self.app._gap())[:2]
         else:                                   # (docked: no clamp, the pair slides in as one: settle_drop)
             x, y = pad.calendar_pos or b[:2]
@@ -658,7 +658,7 @@ class CalendarPopup:
         switch must not hop sides). ``view``: forced (the user's own click). No side fits any
         screen (G7): (None, "mini", a free spot for the mini, False). Saves calendar_side."""
         app, pad, gap = self.app, self.nw.pad, self.app._gap()
-        note = tuple(note_box) if note_box is not None else geom.pad_box(pad)
+        note = tuple(note_box) if note_box is not None else tuple(self.nw.dock_box())
         areas = app.usable()
         obstacles = [s.box for s in app.space({pad.id, CAL})]
         view0 = "big" if self.expanded else "mini"
@@ -754,7 +754,7 @@ class CalendarPopup:
             if side is not None:
                 self.take_plan(side, view)
                 note = geom.pad_box(pad)
-                if how == "language":
+                if how == "language" or self.nw._wide:     # (in Settings: beside its window, nothing pushed)
                     self.move_to(cal_box)
                 else:
                     app.grow({pad.id: geom.union([note, cal_box])}, "app", label, by_calendar=True,
@@ -827,6 +827,10 @@ class CalendarPopup:
         """The docked pair becomes ``note`` and ``cal_box`` (from plan_dock) in one grow. ``side``
         None (G7): the calendar undocks to ``cal_box`` in that same grow."""
         app, pad = self.app, self.nw.pad
+        if self.nw._wide and side is not None:  # Settings' bigger window: the calendar moves, beside it;
+            self.take_plan(side, view)          # nothing is pushed and the pad keeps its size (the user's call)
+            app.motion.run({CAL: tuple(cal_box)})
+            return
         parts = {pad.id: (note, cal_box)}
         if side is None:
             app.grow({pad.id: note, CAL: cal_box}, mode, label, by_calendar=True, parts=parts)
@@ -1156,7 +1160,7 @@ class CalendarPopup:
             return
         before = tuple(self.target_box)
         if self.docked:
-            note = geom.pad_box(pad)
+            note = tuple(self.nw.dock_box())
             if view == "big" and pad.calendar_side in calgeom.SIDES:
                 # a view switch must not hop sides (plan_dock's keep needs the whole big box on the
                 # screen, so near an edge it moved below or across): big on its own side, then no
@@ -1168,9 +1172,25 @@ class CalendarPopup:
             if view == "big" and side is None:             # no side has room for big: it stays mini, docked
                 pad.calendar_hold = None                    # (a view click never undocks it: G7 is for a mini
                 side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, view="mini", keep=True)  # that fits nowhere)
+            lift = None
             if view == "big" and side is not None:         # big goes no further than the room on its side
                 a = app.area_of(note)                       # (the note's own screen: the big box's centre may be on
-                rw = (cal_box[2] - a[0]) if side == "left" else (a[2] - cal_box[0])     # the next one)
+                # near a screen edge (any side, a corner): the pair slides in just far enough that the big
+                # view fits, its side kept (the user: expanding in a corner, or by the left edge, was
+                # blocked); back to mini, it slides back where it was. In Settings its bigger window slides
+                # (the pad stays where it is: Back puts the note there)
+                u = geom.union([note, cal_box])
+                if u[2] - u[0] <= a[2] - a[0] and u[3] - u[1] <= a[3] - a[1]:
+                    dx = max(a[0] - u[0], min(0, a[2] - u[2]))
+                    dy = max(a[1] - u[1], min(0, a[3] - u[3]))
+                    if dx or dy:
+                        if self.nw._wide:
+                            self.nw._shift_wide(dx, dy)
+                        else:
+                            lift = (note[0], note[1])
+                        note = (note[0] + dx, note[1] + dy, note[2] + dx, note[3] + dy)
+                        cal_box = (cal_box[0] + dx, cal_box[1] + dy, cal_box[2] + dx, cal_box[3] + dy)
+                rw = (cal_box[2] - a[0]) if side == "left" else (a[2] - cal_box[0])
                 rh = (cal_box[3] - a[1]) if side == "above" else (a[3] - cal_box[1])
                 lw, lh = self._least_for("big")
                 if lw > rw or lh > rh:                      # not even its least fits: it stays mini
@@ -1179,6 +1199,16 @@ class CalendarPopup:
                 elif cal_box[2] - cal_box[0] > rw or cal_box[3] - cal_box[1] > rh:
                     cal_box = calgeom.spot_box(note, side, min(cal_box[2] - cal_box[0], rw),
                                                min(cal_box[3] - cal_box[1], rh), app._gap())
+            if view == "mini" and v == "mini" and not self.nw._wide:     # back where it slid in from, if it
+                was = getattr(self, "_lifted", None)                    # was not moved since
+                self._lifted = None
+                if was is not None and was[0] == pad.id and was[3:] == (pad.x, pad.y):
+                    w_, h_ = note[2] - note[0], note[3] - note[1]
+                    note = (was[1], was[2], was[1] + w_, was[2] + h_)
+                    side, v, cal_box, _clear = self.plan_dock(side=pad.calendar_side, note_box=note, view="mini",
+                                                              keep=True)
+            if lift is not None and v == "big":
+                self._lifted = (pad.id, lift[0], lift[1], note[0], note[1])
             self._grow_docked(note, side, v, cal_box, "app", "resized")
         else:
             b = self.target_box

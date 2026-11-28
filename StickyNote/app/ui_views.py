@@ -1281,6 +1281,12 @@ SETTING_ICONS = {
     "set_update": "\ue896", "set_rail_hide": "\ue8a0", "set_tour": "\ue897",
 }
 QUICK = ("set_language", "set_cursor", "set_motion", "set_bin_days", "set_auto_layout", "set_rail_hide")
+# Settings, clear cards (2026-11-28, the user's pick): every card reads on any note colour
+SET_CARD_LIFT = (0.62, 0.08)     # a card: the page mixed this far toward white (light page, dark page)
+SET_CARD_EDGE = 0.16             # ... ringed 1 px in the page mixed this far toward its ink
+SET_ROW_HOVER = 0.06             # a row under the mouse: the card this far toward its ink
+SET_CHOICE_LIFT = (0.75, 0.16)   # the choice in use: a raised chip, the card toward white (light, dark)
+EXPORT_GLYPH = ""           # (Segoe Fluent: Export) the Memos card's export row
 UPDATE_NOTE_LINES = 12           # the release notes on the Update page: longer ones are cut with …
 SETTING_COLORS = {"set_color": "memo", "set_default_color": "default", "set_theme_color": "theme"}
 SETTING_SLIDE_MS = anim.LONG     # a setting's page slides in over the list
@@ -1439,8 +1445,8 @@ class SettingsView:
         # ---- the list: a row per setting with its value now, in four groups
         body = self.list_area.inner
         for group, keys in SETTING_GROUPS:       # Settings C: a paper card a group, like the list's
-            cap = tk.Label(body, text=tr(group), font=(UI_FONT, 9), anchor="w")
-            cap.pack(fill="x", pady=(px(12), px(4)), **pad)
+            cap = tk.Label(body, text=tr(group), font=ui_font(9, True), anchor="w")
+            cap.pack(fill="x", pady=(px(14), px(5)), **pad)
             self.muted.append(cap)
             card = tk.Frame(body, bd=0)
             card.pack(fill="x", **pad)
@@ -1457,19 +1463,26 @@ class SettingsView:
                     self.lines.append(line)
                 self._list_row(card, key)
 
-        row = tk.Frame(body, bd=0)
-        row.pack(fill="x", pady=(px(16), 0), **pad)
-        self.rows.append(row)
-        export = FlatButton(row, tr("set_export"), self._export)
-        export.pack(side="left")
-        Tooltip(export, tr("tip_backups"))
-        self.flat.append(export)
-
-        self.rule = tk.Frame(body, height=1, bd=0)
-        self.rule.pack(fill="x", pady=px(12), **pad)
-        delete = FlatButton(body, tr("set_trash"), self._delete, danger=True)
-        delete.pack(anchor="w", pady=(0, px(14)), **pad)
-        self.flat.append(delete)
+        # the memos: export and this memo to the bin, as rows on a card of their own (clear cards)
+        cap = tk.Label(body, text=tr("grp_memos"), font=ui_font(9, True), anchor="w")
+        cap.pack(fill="x", pady=(px(14), px(5)), **pad)
+        self.muted.append(cap)
+        card = tk.Frame(body, bd=0)
+        card.pack(fill="x", **pad)
+        strips = []
+        for _ in range(3):
+            strip = tk.Frame(body, height=1, bd=0)
+            strip.pack(fill="x", **pad)
+            strips.append(strip)
+        self.cards.append((card, strips))
+        self.action_rows = []
+        self._action_row(card, tr("set_export"), EXPORT_GLYPH, self._export, tip=tr("tip_backups"))
+        line = tk.Frame(card, height=1, bd=0)
+        line.pack(fill="x", padx=px(10))
+        self.lines.append(line)
+        self._action_row(card, tr("set_trash"), GLYPH["trash"], self._delete, danger=True)
+        tk.Frame(body, height=px(14), bd=0).pack(fill="x")      # (room under the last card)
+        self.rule = None
 
     # -- Update: the installed version, Check, and what the last check or download says
     def _build_update(self, body, pad):
@@ -1622,6 +1635,29 @@ class SettingsView:
             w.bind("<Leave>", lambda e: hover(row.winfo_containing(e.x_root, e.y_root) in parts))
             w.bind("<ButtonRelease-1>", lambda e, k=key: self.open(k))
 
+    def _action_row(self, card, text, glyph, command, danger=False, tip=None):
+        """A row that does something at once (no page): its icon and its words, red for the bin."""
+        px = self.app.px
+        row = tk.Frame(card, bd=0, cursor="hand2")
+        row.pack(fill="x", padx=px(10))
+        icon = tk.Label(row, bd=0, cursor="hand2")
+        icon.pack(side="left", padx=(0, px(8)), pady=px(7))
+        name = tk.Label(row, text=text, font=(UI_FONT, 9), anchor="w", cursor="hand2")
+        name.pack(side="left", fill="x", expand=True)
+        parts = (row, icon, name)
+        self.action_rows.append((parts, glyph, danger))
+        if tip:
+            Tooltip(name, tip)
+
+        def hover(on):
+            k = self._card_colors()
+            for w in parts:
+                w.configure(bg=k.lit if on else k.rest)
+        for w in parts:
+            w.bind("<Enter>", lambda e: hover(True))
+            w.bind("<Leave>", lambda e: hover(row.winfo_containing(e.x_root, e.y_root) in parts))
+            w.bind("<ButtonRelease-1>", lambda e: command())
+
     def _fit_name(self, key):
         """The name cut with … to the room its row leaves (English names run longer): never under
         the value; the whole name on hover then."""
@@ -1694,8 +1730,36 @@ class SettingsView:
         return _mix(self.frame, k.rest, c.fg, 0.09)
 
     def _card_colors(self):
-        """The cards' colours: the list's paper card in the memo's colour, on this page."""
-        return card_colors(self.frame, self.nw.note.color, self.nw.colors.bg)
+        """The cards' colours (clear cards): a surface a set step off the page with a 1 px edge, so a
+        card reads on a pale note too (the list's recipe left 1.05:1 on yellow), and a hover tint."""
+        c = self.nw.colors
+        key = ("settings", str(c.bg).upper(), str(c.fg).upper())
+        k = _CARD_COLORS.get(key)
+        if k is None:
+            base = card_colors(self.frame, self.nw.note.color, c.bg)
+            dark = luminance(self.frame, c.bg) < 0.18
+            rest = _mix(self.frame, c.bg, "#FFFFFF", SET_CARD_LIFT[1] if dark else SET_CARD_LIFT[0])
+            lit = _mix(self.frame, rest, c.fg, SET_ROW_HOVER)
+            muted = readable(self.frame, c.muted, lit, TEXT_CONTRAST)
+            edge = _mix(self.frame, c.bg, c.fg, SET_CARD_EDGE)
+            k = _CARD_COLORS[key] = base._replace(rest=rest, lit=lit, muted=muted, edge=edge)
+        return k
+
+    def _choice_colors(self, c, track):
+        """A choice row's colours: (track, the chosen chip, its 1 px edge). The one in use is raised: a
+        lighter chip with an edge on the darker track (it read as pressed when it was darker)."""
+        dark = luminance(self.frame, track) < 0.18
+        chip = _mix(self.frame, track, "#FFFFFF", SET_CHOICE_LIFT[1] if dark else SET_CHOICE_LIFT[0])
+        return track, chip, _mix(self.frame, track, c.fg, 0.22)
+
+    def _paint_choices(self, buttons, now, track):
+        c = self.nw.colors
+        track, chip, edge = self._choice_colors(c, track)
+        for value, b in buttons.items():
+            chosen = value == now
+            b._bg = chip if chosen else track
+            b.configure(bg=b._bg, font=ui_font(9, chosen), highlightthickness=self.app.px(1),
+                        highlightbackground=edge if chosen else track, highlightcolor=edge if chosen else track)
 
     def _value_text(self, key) -> str:
         n, p, prefs = self.nw.note, self.nw.pad, self.app.prefs
@@ -1733,12 +1797,15 @@ class SettingsView:
         c = self.nw.colors
         for key, (_row, _name, value, dot, _chev) in self.list_rows.items():
             value.configure(text=self._value_text(key))
-            if dot is not None:
+            if dot is not None:             # a smooth round dot, never a hollow square (read as a checkbox)
                 color = self._shown_color(SETTING_COLORS[key])
                 size = int(dot.cget("width"))
                 dot.delete("all")
-                edge = readable(dot, Colors.of(dot, color, solid=True).border, c.bg, MARK_CONTRAST)
-                dot.create_rectangle(0, 0, size - 1, size - 1, fill=color, outline=edge)   # (shows on its own colour)
+                k = self._card_colors()
+                ring = readable(dot, Colors.of(dot, color, solid=True).border, k.rest, MARK_CONTRAST)
+                dot._ring = ring
+                dot._photo = dot_photo(self.app, color, ring, size, 1)     # (a ring: shows on its own colour)
+                dot.create_image(size // 2, size // 2, image=dot._photo)
 
     def open(self, key, animated=True):
         """One setting's page slides in from the right over the list, which steps back a little
@@ -1926,11 +1993,12 @@ class SettingsView:
         self._sync_warning(which)
 
     def _draw_empty(self, cv, add):
-        """A dashed square; the next one to fill has a + in it."""
+        """An empty round slot (smooth, as the swatches); the next one to fill has a + in it."""
         c = self.nw.colors
         cv.delete("all")
         size = int(cv.cget("width"))
-        cv.create_rectangle(1, 1, size - 2, size - 2, outline=c.muted if add else c.border, dash=(2, 2))
+        cv._photo = dot_photo(self.app, c.bg, c.muted if add else c.border, size, 1)
+        cv.create_image(size // 2, size // 2, image=cv._photo)
         if add:
             m, arm = size // 2, max(3, size // 5)
             cv.create_line(m - arm, m, m + arm + 1, m, fill=c.muted)
@@ -1949,28 +2017,24 @@ class SettingsView:
             self.size_box.set(n.font_size)
             self.pin_box.set(self.app.prefs.pin_limit)
             c = self.nw.colors
-            for code, b in self.lang_buttons.items():
-                chosen = code == texts.language()
-                b._bg = c.select if chosen else c.well
-                b.configure(bg=b._bg, font=ui_font(9, chosen))
-            for fmt, b in self.date_buttons.items():
-                chosen = fmt == texts.date_format()
-                b._bg = c.select if chosen else c.well
-                b.configure(bg=b._bg, font=ui_font(9, chosen))
             prefs = self.app.prefs
             k = self._card_colors()
-            quick = (self.cursor_buttons, self.bin_buttons, self.motion_buttons, self.lang_buttons)
-            for buttons, now in ((self.snap_buttons, prefs.snap_gap), (self.cursor_buttons, prefs.cursor_color),
-                                 (self.bin_buttons, prefs.bin_days),
-                                 (self.min_buttons, prefs.minimize_style),
-                                 (self.motion_buttons, self.app.clock.mode)):
-                for value, b in buttons.items():
-                    chosen = value == now
-                    b._bg = c.select if chosen else (self._well(c, k) if buttons in quick else c.well)
-                    b.configure(bg=b._bg, font=ui_font(9, chosen))
-            ink = readable(self.frame, c.fg, k.lit, MARK_CONTRAST)
-            self.auto_switch.set(prefs.auto_layout, ink=ink, pale=k.rest, bg=k.rest)
-            self.rail_switch.set(bool(prefs.rail_hide), ink=ink, pale=k.rest, bg=k.rest)
+            well = self._well(c, k)             # (on a card: its well; on a page: the page's)
+            for buttons, now, track in ((self.lang_buttons, texts.language(), well),
+                                        (self.cursor_buttons, prefs.cursor_color, well),
+                                        (self.bin_buttons, prefs.bin_days, well),
+                                        (self.motion_buttons, self.app.clock.mode, well),
+                                        (self.date_buttons, texts.date_format(), c.well),
+                                        (self.snap_buttons, prefs.snap_gap, c.well),
+                                        (self.min_buttons, prefs.minimize_style, c.well)):
+                self._paint_choices(buttons, now, track)
+            accent = readable(self.frame, accent_color(self.frame, self.app.theme_colors().color, k.rest),
+                              k.rest, MARK_CONTRAST)    # on: the theme's colour (the ink read as off)
+            white = contrast(self.frame, accent, "#FFFFFF") >= MARK_CONTRAST     # (Windows' own: a white knob
+            knob = "#FFFFFF" if white else "#202020"                             # on the accent, where it reads)
+            off = readable(self.frame, c.muted, k.rest, MARK_CONTRAST)     # off: a quieter ring and knob
+            for switch, on in ((self.auto_switch, prefs.auto_layout), (self.rail_switch, bool(prefs.rail_hide))):
+                switch.set(on, ink=accent if on else off, pale=knob if on else k.rest, bg=k.rest)
             self._sync_rows()
             self._sync_update()
             self.frame.after_idle(self._refit_quick)     # (a bold choice is wider: it may not fit now)
@@ -1978,11 +2042,16 @@ class SettingsView:
             self._syncing = False
 
     def _draw_swatch(self, cv, color, selected):
-        c = Colors.of(cv, color, solid=True)        # the swatch is the color itself, never its pale page
+        """A round swatch (smooth, like the colour menu's): the colour itself, never its pale page,
+        ringed so it shows on its own colour; the one in use has a tick and a stronger ring."""
+        c = Colors.of(cv, color, solid=True)
+        page = self.nw.colors.bg
         cv.delete("all")
         size = int(cv.cget("width"))
-        cv.create_rectangle(0, 0, size - 1, size - 1, fill=color,
-                            outline=c.fg if selected else c.border, width=2 if selected else 1)
+        ring = readable(cv, c.fg if selected else c.border, page, MARK_CONTRAST if selected else 1.4)
+        cv._photo = dot_photo(self.app, color, ring, size, 2 if selected else 1,
+                              check=c.fg if selected else None)
+        cv.create_image(size // 2, size // 2, image=cv._photo)
         if selected:
             cv.create_text(size / 2, size / 2, text=GLYPH["check"], fill=c.fg,
                            font=(self.app.icon_font, 8 if size > self.app.px(20) else 7))
@@ -2004,10 +2073,17 @@ class SettingsView:
         k = self._card_colors()
         words = k.muted                                     # (readable on the hovered row, k.lit, too)
         ink = readable(self.frame, readable(self.frame, c.muted, k.rest, MARK_CONTRAST), k.lit, MARK_CONTRAST)
-        for card, strips in self.cards:
-            card.configure(bg=k.rest)
+        for card, strips in self.cards:     # (clear cards: a 1 px edge round each)
+            card.configure(bg=k.rest, highlightthickness=self.app.px(1), highlightbackground=k.edge,
+                           highlightcolor=k.edge)
             for strip, color in zip(strips, k.rest_strips):
                 strip.configure(bg=color)
+        danger = readable(self.frame, c.danger, k.lit, TEXT_CONTRAST)
+        for parts, glyph, is_danger in getattr(self, "action_rows", ()):
+            for w in parts:
+                w.configure(bg=k.rest)
+            parts[2].configure(fg=danger if is_danger else c.fg)
+            paint_glyph(self.app, parts[1], glyph, danger if is_danger else ink, box=ICON_BOX)
         for key, (row, name, value, dot, chevron) in self.list_rows.items():
             for w in (row, name, value, chevron, dot, self.row_icons[key]):
                 if w is not None:
@@ -2031,7 +2107,8 @@ class SettingsView:
         for box in (self.alpha_box, self.size_box, self.pin_box):
             box.recolor(c)
         self.font_picker.recolor(c)
-        self.rule.configure(bg=c.border)
+        if self.rule is not None:
+            self.rule.configure(bg=c.border)
         self.sync()
 
     def _alpha_moved(self, value):

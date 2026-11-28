@@ -182,13 +182,13 @@ class TitleAndSwatchTest(Case):
     def test_settings_dot_shows_on_its_own_colour(self):
         self.nw.show_settings()
         self.settle()
-        page = self.nw.colors.bg
         sv = self.nw.settings_view
+        card = sv._card_colors().rest                   # (clear cards: the dot sits on its card)
         dots = [d for (_r, _n, _v, d, _c) in sv.list_rows.values() if d is not None]
         self.assertTrue(dots)
         for d in dots:
-            rect = d.find_all()[0]
-            self.assertGreaterEqual(contrast(self.app.root, d.itemcget(rect, "outline"), page), MARK_CONTRAST)
+            self.assertEqual(d.type(d.find_all()[0]), "image")      # a smooth round dot, not a square
+            self.assertGreaterEqual(contrast(self.app.root, d._ring, card), MARK_CONTRAST)
 
 
 class WarmDeepTest(unittest.TestCase):

@@ -652,8 +652,8 @@ class NoteWindow:
         cal = self.calendar
         y = max(ay0, min(y0, ay1 - h))
         others = [_pad_box(o.pad) for o in self.app.windows.values()     # (what it would cover: the other
-                  if o is not self and not o._closing and not o.minimized]  # notes, its own calendar)
-        if cal is not None and cal.target_box is not None:
+                  if o is not self and not o._closing and not o.minimized]  # notes; its own docked calendar
+        if cal is not None and cal.target_box is not None and not cal.docked:   # moves aside: _redock_calendar)
             others.append(tuple(cal.target_box))
         gap = self.app._gap()
 
@@ -693,6 +693,48 @@ class NoteWindow:
             return
         self.win.lift()
         self.bump_look()
+        self._redock_calendar()             # its docked calendar beside the window seen, not under it
+
+    def dock_box(self):
+        """The box its docked calendar sits beside: Settings' bigger window while it shows, else the
+        pad's own box."""
+        if self._wide and getattr(self, "_wide_box", None):
+            x, y, w, h = self._wide_box
+            return x, y, x + w, y + h
+        return _pad_box(self.pad)
+
+    def _shift_wide(self, dx, dy):
+        """Settings' bigger window glides by (dx, dy) (its calendar expanding by a screen edge needs the
+        room); the pad stays where it is."""
+        if not self._wide:
+            return
+        x, y, w, h = self._wide_box
+        self._wide_box = (x + dx, y + dy, w, h)
+        win, clock = self.win, anim.clock_of(self.win)
+        try:
+            x0, y0 = win.winfo_rootx(), win.winfo_rooty()
+        except tk.TclError:
+            return
+        clock.tween(win, "wide_shift", (x + dx, y + dy), anim.glide_ms(math.hypot(dx, dy)),
+                    read=lambda: (float(x0), float(y0)), frm=(x0, y0),
+                    write=lambda v: win.winfo_exists() and clock.move(win, round(v[0]), round(v[1])))
+
+    def _redock_calendar(self):
+        """Its docked calendar glides to its side of dock_box (Settings opened or closed, the window
+        moved): it moves; other notes stay where they are (the user's call)."""
+        cal = self.calendar
+        if cal is None or not cal.docked or cal.target_box is None or getattr(cal, "_closing", False):
+            return
+        # the rule of a view click: its side kept, big only as far as the room there, else mini (in
+        # Settings it alone moves). A freer plan hopped above, or stood off, back in a bottom corner.
+        p, was_big = self.pad, cal.expanded
+        flags = (p.calendar_hold, p.calendar_auto_big)
+        try:
+            cal._click_view_now("big" if was_big else "mini")
+        except tk.TclError:
+            return
+        if cal.expanded == was_big:         # (not a click of the user's: their choice flags stay as they were)
+            p.calendar_hold, p.calendar_auto_big = flags
 
     def _settle_wide(self, off):
         """Settings' bigger window let go after a drag: it stays as it is, beside the pad as it was
@@ -713,6 +755,7 @@ class NoteWindow:
                 self.win.geometry(f"+{x}+{y}")
         except tk.TclError:
             pass
+        self._redock_calendar()
 
     def _end_wide(self):
         """Settings closes (or the note folds, goes away, is dragged): the window is the pad again."""
@@ -726,6 +769,10 @@ class NoteWindow:
             return
         self._sized(x1 - x0, y1 - y0)       # (the date row, the rail, a picture: for its own size again)
         self.bump_look()
+        if self.app.motion.busy():          # (inside a plan that moves it: once it is still)
+            self.app.motion.when_still(self._redock_calendar)
+        else:
+            self._redock_calendar()
 
     def toggle_settings(self):
         if self.view == "settings":
