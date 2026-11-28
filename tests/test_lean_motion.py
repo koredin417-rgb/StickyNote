@@ -121,6 +121,90 @@ class GroupDragCoversTest(Case):
         self.settle()
 
 
+class OpenListFollowsTest(Case):
+    """The user's recording: a memo written in one note never showed in another note's open list
+    ("no memos yet"), though the calendar showed it. The list follows after the typing pause, and
+    stays where it was scrolled."""
+
+    def test_open_list_shows_a_memo_being_written(self):
+        a = self.nw
+        b = self.app.new_window(from_window=a)
+        self.settle()
+        b.show_list()
+        self.settle()
+        self.assertEqual(b.list_view.titles(), [])
+        a.body.insert("1.0", "ssss")
+        a.sync_from_widgets()
+        pump(self.app, lambda: b.list_view.titles() != [], timeout=3)
+        self.assertEqual(len(b.list_view.titles()), 1)
+
+
+class EntryKoreanTest(Case):
+    """The user: Korean typing in the search bar. The syllable being put together shows at the cursor
+    (the IME's own box is off for the note window; only the memo text drew it before)."""
+
+    def test_search_shows_the_syllable_being_typed(self):
+        import winapi
+        nw = self.nw
+        nw.show_list()
+        self.settle()
+        e = nw.list_view.search_entry
+        e.focus_force()
+        e.insert("end", "ab")
+        pump(self.app, lambda: e.focus_get() is e, timeout=1)
+        with patched(winapi, "composition", lambda hwnd, take=False: "한"):
+            e.event_generate("<KeyRelease>", keysym="a")
+            pump(self.app, timeout=0.05)
+            lbl = nw.list_view.search_preedit.label
+            self.assertTrue(lbl.winfo_ismapped())
+            self.assertEqual(lbl.cget("text"), "한")
+            b = e.bbox(1)
+            self.assertEqual(int(lbl.place_info()["x"]), b[0] + b[2])     # right after "ab"
+        e.event_generate("<KeyRelease>", keysym="a")
+        pump(self.app, timeout=0.05)
+        self.assertFalse(lbl.winfo_ismapped())                          # finished: gone
+
+
+class CaretFastKeysTest(Case):
+    """The user: with Backspace held, the caret trailed behind the text (measured: ~10 characters, and
+    still off after the key was let go). The text's own <BackSpace> binding hid the key from the
+    caret; it listens on a binding tag of its own now. Real key events through Tk's queue."""
+
+    def held(self, keysym, n=12, period_ms=33):
+        b = self.nw.body
+        for i in range(n):
+            b.after(i * period_ms, lambda: b.event_generate("<KeyPress>", keysym=keysym, when="tail"))
+        pump(self.app, timeout=n * period_ms / 1000 + 0.15)
+
+    def assert_at_insert(self):
+        nw = self.nw
+        nw.update_idletasks() if hasattr(nw, "update_idletasks") else nw.win.update_idletasks()
+        box, caret = nw.body.bbox("insert"), nw.caret
+        self.assertIsNotNone(caret._place)
+        self.assertAlmostEqual(caret._place[0], box[0] - caret.tk_width // 2, delta=1)
+
+    def test_held_backspace_keeps_up(self):
+        b = self.nw.body
+        b.insert("1.0", "s" * 40)
+        b.mark_set("insert", "end-1c")
+        b.focus_force()
+        self.settle()
+        self.held("BackSpace")
+        self.assertEqual(len(b.get("1.0", "end-1c")), 40 - 12)
+        self.assert_at_insert()
+
+    def test_held_return_and_delete_keep_up(self):
+        b = self.nw.body
+        b.insert("1.0", "abc def ghi")
+        b.mark_set("insert", "1.3")
+        b.focus_force()
+        self.settle()
+        self.held("Return", n=3)
+        self.assert_at_insert()
+        self.held("Delete", n=3)
+        self.assert_at_insert()
+
+
 class WheelGlideTest(Case):
     def test_a_notch_meanwhile_keeps_the_speed(self):
         b = self.nw.body

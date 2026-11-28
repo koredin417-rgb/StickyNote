@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- A memo being written in one note now shows in another note's open memo list after the typing
+  pause (it said "no memos yet"), keeping where that list was scrolled.
+- Holding Backspace (or typing fast): the caret follows the text at once instead of trailing
+  behind it until the key was let go.
+- Korean in the list's search bar and a memo's title line: the syllable being typed shows at the
+  cursor (it was invisible until finished).
+
 ## 1.2.2 — 2026-11-28
 
 Settings gets clearer cards, and the docked calendar makes room wherever it is. (1.2.1 was
