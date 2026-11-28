@@ -419,10 +419,7 @@ class NoteWindow:
         need not have before it is opened)."""
         if self._settings_view is None:
             sv = self._settings_view = SettingsView(self)
-            sv.recolor(self.colors)
-            for w in (sv.alpha_box.entry, sv.size_box.entry, sv.pin_box.entry):
-                _finish_typing_first(w)
-                w.bind("<FocusIn>", lambda e: winapi.hide_ime_box(self.win.winfo_id()), add="+")
+            sv.recolor(self.colors)             # (its pages' entries are hooked when made: settings_pages)
         return self._settings_view
 
     def end_covers(self):
@@ -1887,8 +1884,17 @@ class NoteWindow:
         cv.delete("all")
         if page:
             f = self._title_font
-            text = fit_text(tr(f"title_{self.view}"), room - px(6), f.measure, self._narrowest(f))
+            sv = self._settings_view if self.view == "settings" else None
+            opened = sv.opened if sv is not None else None
+            name = tr(opened).split(" (")[0] if opened else tr(f"title_{self.view}")
+            text = fit_text(name, room - px(6), f.measure, self._narrowest(f))
             cv.create_text(px(2), h / 2, anchor="w", text=text, font=f, fill=c.fg, tags=("text",))
+            if opened and text == name:         # a setting's page: its name, then where it is, quieter
+                sf = self._small_font
+                x = px(2) + f.measure(text) + px(6)
+                crumb = tr("title_settings")
+                if x + sf.measure(crumb) <= room:
+                    cv.create_text(x, h / 2, anchor="w", text=crumb, font=sf, fill=c.muted, tags=("text",))
             self.date_tip.text = tr("tip_grab")
             return
         num, small = texts.date_row(date.today())

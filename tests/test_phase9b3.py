@@ -168,7 +168,11 @@ class KeysPageTest(Case):
         self.assertEqual(nw.view, "settings")
         self.assertEqual(nw.settings_view.opened, "set_keys")
         shown = list(self.labels(nw.settings_view.pages["set_keys"]))
-        for text in ("Ctrl+Shift+T", "Ctrl+W", "Alt", tr("keys_mouse")):
+        rows = nw.settings_view.key_rows            # (the redesign: each key a keycap of its own)
+        for combo, caps in (("Ctrl+Shift+T", ["Ctrl", "Shift", "T"]), ("Ctrl+W", ["Ctrl", "W"])):
+            self.assertEqual([c.cget("text") for c in rows[combo]], caps)
+            self.assertTrue(all(str(c.cget("image")) for c in rows[combo]), combo)    # drawn, smooth
+        for text in ("Alt", tr("keys_mouse")):
             self.assertTrue(any(text in s for s in shown), text)
         nw.go_back()                            # back: the settings list, then the memo
         self.settle()
